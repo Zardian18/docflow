@@ -18,3 +18,10 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# wrangler local secrets
+.dev.vars
+.dev.vars.*
+
+# Neon CLI local link/config state
+.neon/
