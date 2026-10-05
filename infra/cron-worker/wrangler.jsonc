@@ -11,7 +11,7 @@
     "crons": ["*/20 * * * *"],
   },
   "vars": {
-    "API_TICK_URL": "https://docflow.onrender.com/internal/tick",
+    "API_TICK_URL": "https://docflow-xayj.onrender.com/internal/tick",
   },
   "observability": {
     "enabled": true,
