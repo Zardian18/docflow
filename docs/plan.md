@@ -1,7 +1,7 @@
 # DocFlow — Implementation Plan
 
 **Document Approval Workflow Management System**
-Version 0.2 · Updated 29 Sep 2026
+Version 0.3 · Updated 5 Oct 2026 (Phase 1: hosting reconciled with what was actually set up — see `decisions.md` D15)
 Inputs: `URS.md` (converted from the client's URS.docx v1.0, 25 Aug 2026), the Figma file "Document Approval Workflow — App Design" (9 screens), and `decisions.md` (owner's answers, 29 Sep 2026 — read that file for the full reasoning behind every D-numbered decision referenced here)
 
 > **This is the single, current, self-contained plan.** It replaces two earlier drafts (v0.1, and a v0.2 patch that referenced v0.1) — everything from both is folded in here so there is nothing else to cross-reference.
@@ -57,8 +57,8 @@ Inputs: `URS.md` (converted from the client's URS.docx v1.0, 25 Aug 2026), the F
 ### 2.1 Overview
 
 ```
- Browser ──HTTPS──► Cloudflare Pages ── static React SPA ── app.<domain-once-bought>
-    │                                    (today: <project>.pages.dev)
+ Browser ──HTTPS──► Cloudflare Worker (static assets) ── React SPA ── app.<domain-once-bought>
+    │                                    (today: docflow.<subdomain>.workers.dev)
     │ HTTPS + session cookie
     ▼
  API: Node + Fastify in a Docker container ── Render (free web service)
@@ -78,7 +78,7 @@ Inputs: `URS.md` (converted from the client's URS.docx v1.0, 25 Aug 2026), the F
 | Layer | Choice | Reason |
 |---|---|---|
 | Language | TypeScript (strict) everywhere | One language; shared zod schemas between web and API remove contract drift (**D13**, confirmed) |
-| Frontend hosting | **Cloudflare Pages** | Confirmed free, no card, and **explicitly allows commercial use** — the direct replacement for what Vercel would have given, without Vercel's non-commercial restriction (see §3) |
+| Frontend hosting | **Cloudflare Workers static assets** (assets-only Worker `docflow`; originally planned as Pages — D15) | Confirmed free, no card, and **explicitly allows commercial use** — the direct replacement for what Vercel would have given, without Vercel's non-commercial restriction (see §3) |
 | Frontend | React + Vite SPA, React Router, TanStack Query, TanStack Table, Tailwind CSS, shadcn/ui, react-hook-form + zod, dnd-kit (drag-reorder), date-fns | Every screen is behind login, so SSR/SEO gives nothing; a static SPA is the cheapest and most decoupled thing to host |
 | Backend hosting | **Render** (free web service, Docker) | Confirmed no card required. Spins down after ~15 min idle — §2.4 explains why this doesn't delay notifications |
 | Backend | Fastify + zod type provider, `@fastify/cookie`, `@fastify/helmet`, `@fastify/cors`, `@fastify/rate-limit`, pino logging | Small and fast to cold-start (matters on Render's free tier) |
@@ -94,7 +94,7 @@ Inputs: `URS.md` (converted from the client's URS.docx v1.0, 25 Aug 2026), the F
 
 ### 2.3 Why the client's domain matters, and what to do before it exists (D11)
 1. **Email deliverability:** transactional providers need the sender domain verified with SPF/DKIM DNS records to send reliably (Resend's/Brevo's exact steps: **VERIFY AT BUILD**).
-2. **Cookies:** the SPA and API are separate deployments on separate providers (Cloudflare Pages, Render). Until a domain exists, they sit on unrelated default domains (`*.pages.dev`, `*.onrender.com`), so the session cookie must be `SameSite=None; Secure` to survive cross-site — workable, but weaker than same-site. Once the client's domain exists, point `app.<domain>` at Cloudflare Pages and `api.<domain>` at Render (both support free custom domains/CNAMEs), switch the cookie to `SameSite=Lax`, and retest login. Do this before go-live.
+2. **Cookies:** the SPA and API are separate deployments on separate providers (Cloudflare Workers, Render). Until a domain exists, they sit on unrelated default domains (`*.workers.dev`, `*.onrender.com`), so the session cookie must be `SameSite=None; Secure` to survive cross-site — workable, but weaker than same-site. Once the client's domain exists, point `app.<domain>` at Cloudflare Workers and `api.<domain>` at Render (both support free custom domains/CNAMEs), switch the cookie to `SameSite=Lax`, and retest login. Do this before go-live.
 
 ### 2.4 Why Render's 15-minute sleep does not delay emails (confirming the owner's own reasoning)
 
@@ -123,13 +123,13 @@ docflow/
 │  ├─ decisions.md              # answers to D1–D14, with dates
 │  └─ design/                   # Figma screenshots (optional)
 ├─ apps/
-│  ├─ web/                      # React SPA  → Cloudflare Pages
+│  ├─ web/                      # React SPA  → Cloudflare Workers (static assets)
 │  └─ api/                      # Fastify API → Docker → Render
 ├─ packages/
 │  └─ shared/                   # zod schemas, enums (WorkflowStatus…), types
 ├─ infra/
-│  └─ cron-worker/              # Cloudflare Worker that calls /internal/tick
-└─ .github/workflows/           # ci.yml, deploy-web.yml, deploy-api.yml, backup.yml
+│  └─ cron-worker/              # Cloudflare Worker `docflow-cron` that calls /internal/tick
+└─ .github/workflows/           # ci.yml, backup.yml — deploys use each host's own git integration (D15)
 ```
 
 Why a monorepo: Claude Code can change an API contract and the screen that uses it in one session and one commit; shared zod types make a mismatch a compile error. Split into two repos only if different teams/vendors own each half — `packages/shared` can be published as a package if that day comes.
@@ -140,7 +140,7 @@ Why a monorepo: Claude Code can change an API contract and the screen that uses 
 
 | Service | What's free | Status here |
 |---|---|---|
-| **Cloudflare Pages** | No card, unlimited static bandwidth, 500 builds/month | **In use** (frontend). Explicitly allows commercial use, unlike Vercel Hobby |
+| **Cloudflare Workers static assets** | No card | **In use** (frontend; the plan originally said Pages — D15). Explicitly allows commercial use, unlike Vercel Hobby |
 | **Cloudflare Workers (cron trigger only)** | 100K requests/day, cron triggers included, no card | **In use** (retry tick) — only Cloudflare's *R2* product prompts for a payment method, not Workers/Pages |
 | **Vercel Hobby** | Generous limits, but **non-commercial use only**; explicitly defines commercial use to include "a paid employee or consultant writing the code" | **Excluded.** This is a paid client deliverable |
 | **Cloudflare R2** | 10 GB / 1M writes / 10M reads per month, no egress fees | **Excluded (D12).** Multiple reports say enabling it prompts for a payment method, and at least one user reported an unexpected $5 charge — not worth the risk given "no card anywhere" |
@@ -161,7 +161,7 @@ Why a monorepo: Claude Code can change an API contract and the screen that uses 
 
 ### 3.1 Hosting profile (single profile — no more A/B/C)
 
-Cloudflare Pages (web) + Render free (API, Docker) + Neon (DB) + Backblaze B2 (files) + Brevo or Resend (email) + Cloudflare Worker cron (retry tick, ~every 15–30 min) + GitHub Actions (CI/CD, nightly backup).
+Cloudflare Workers static assets (web) + Render free (API, Docker) + Neon (DB) + Backblaze B2 (files) + Brevo or Resend (email) + Cloudflare Worker cron (retry tick, ~every 15–30 min) + GitHub Actions (CI, nightly backup); deploys via Render's and Cloudflare's git integrations.
 
 Because the API is a plain Docker container configured only by environment variables, moving off Render later (to Cloud Run, Koyeb, Oracle, or a paid Render plan) is a redeploy, not a rewrite — see §7.
 
@@ -257,7 +257,7 @@ Then list any questions you have about the plan or decisions files. Do not proce
 ---
 
 ### Phase 1 — Walking skeleton, deployed (M)
-**Goal:** a "hello world" web app talking to a "hello world" API and a real database, **deployed to the real free hosts** with CI, on Cloudflare Pages and Render specifically.
+**Goal:** a "hello world" web app talking to a "hello world" API and a real database, **deployed to the real free hosts** with CI, on Cloudflare Workers and Render specifically.
 
 **Prompt for Claude Code**
 ~~~text
@@ -265,9 +265,9 @@ Read CLAUDE.md and docs/plan.md sections 2 and 3. Propose a plan, wait for my ap
 - apps/api: Fastify + TypeScript strict, env validation with zod (fail fast on missing vars), pino logging, GET /healthz and GET /v1/ping, Drizzle configured against Neon via a standard TCP driver and the pooled connection string, first migration creating the `roles` table with its `permission` column, graceful shutdown. Write a Dockerfile (multi-stage, non-root, small image) and a docker-compose for local Postgres.
 - apps/web: Vite + React + TypeScript, Tailwind, shadcn/ui, React Router, TanStack Query; one page that calls /v1/ping and shows the result.
 - packages/shared: a zod schema and enum imported by both apps to prove the sharing works.
-- CI (GitHub Actions): install, typecheck, lint, test, build on every PR. Deploy workflows for web (Cloudflare Pages) and api (Render, via Render's deploy hook or Blueprint) on merge to main, using GitHub secrets. Do not put secrets in the repo.
+- CI (GitHub Actions): install, typecheck, lint, test, build on every PR. No deploy workflows: Render and Cloudflare Workers Builds deploy from their own git integrations on push to main (D15). Do not put secrets in the repo.
 - infra/cron-worker: a Cloudflare Worker with a cron trigger (every ~20 minutes) that POSTs to /internal/tick with a shared secret header. The endpoint may just return 200 for now.
-- Set the session cookie to SameSite=None; Secure for now, since web and api are on different default domains (*.pages.dev, *.onrender.com) until a real domain exists.
+- Set the session cookie to SameSite=None; Secure for now, since web and api are on different default domains (*.workers.dev, *.onrender.com) until a real domain exists.
 Verify every library/service setting against its current official docs. Tell me exactly which manual steps I must do in each dashboard. Measure and report the actual cold-start delay on Render after 15+ minutes idle. Update CLAUDE.md with the real commands you created.
 ~~~
 **Gate:** the web app loads, calls the API, data comes from Neon; a PR triggers CI; a merge deploys both; you have observed and written down the real Render cold-start delay.
@@ -362,7 +362,7 @@ Review: authorization on every endpoint (write a table of endpoint x permission 
 
 **Prompt for Claude Code**
 ~~~text
-Read CLAUDE.md and docs/plan.md sections 2.3, 6-8. Prepare go-live: point app.<domain> at Cloudflare Pages and api.<domain> at Render, switch the session cookie from SameSite=None to SameSite=Lax and retest login end to end, verify SPF/DKIM for the email domain. Separate production and staging configs (never share DB or secrets), production seed (Admin, the single CFO, system roles), a go-live checklist (DNS, budget/quota watch per plan section 6, backup job green, first-login/set-password emails tested), an operations runbook (how to deploy, roll back, restore, rotate secrets, replace the CFO, reassign a stuck step, what to do when the email or storage quota is hit), and short admin/creator/approver user guides. Do not change product behaviour in this phase.
+Read CLAUDE.md and docs/plan.md sections 2.3, 6-8. Prepare go-live: point app.<domain> at Cloudflare Workers and api.<domain> at Render, switch the session cookie from SameSite=None to SameSite=Lax and retest login end to end, verify SPF/DKIM for the email domain. Separate production and staging configs (never share DB or secrets), production seed (Admin, the single CFO, system roles), a go-live checklist (DNS, budget/quota watch per plan section 6, backup job green, first-login/set-password emails tested), an operations runbook (how to deploy, roll back, restore, rotate secrets, replace the CFO, reassign a stuck step, what to do when the email or storage quota is hit), and short admin/creator/approver user guides. Do not change product behaviour in this phase.
 ~~~
 **Gate:** client sign-off; runbook reviewed; you can restore and redeploy without Claude Code.
 
@@ -372,7 +372,7 @@ Read CLAUDE.md and docs/plan.md sections 2.3, 6-8. Prepare go-live: point app.<d
 
 - **Environments:** `local` (docker-compose Postgres, console email adapter), `staging` (own Neon project/branch, own Backblaze bucket, email restricted to allow-listed test addresses), `production`. Never share secrets or databases between them.
 - **Secrets:** GitHub Actions secrets and each host's secret store; `.env.example` lists names only.
-- **CI/CD:** PR → typecheck, lint, tests (Postgres service container), build. Merge to `main` → deploy staging automatically, production by manual approval.
+- **CI/CD:** PR → typecheck, lint, tests (Postgres service container), build. Merge to `main` → Render and Cloudflare deploy automatically via their git integrations. **As built in Phase 1 there is one environment and no staging** (D15); add a staging service/branch before real data goes in.
 - **Migrations:** explicit deploy step, backwards-compatible, never edited after merge.
 - **Backups:** nightly `pg_dump` from GitHub Actions into a second Backblaze B2 bucket (or separate path), keep 14 daily + 8 weekly, **test a restore before go-live** — this is the client's audit data and Neon's free-tier point-in-time window is short.
 - **Cost guardrails (no card anywhere to watch a bill on, so watch usage instead):** Render's 750 free instance-hours/month (should stay well under it given §2.4's design); Neon's 100 compute-hours/month and 0.5 GB storage; Backblaze B2's 10 GB storage cap; Brevo/Resend's daily send cap; GitHub Actions' free minutes allowance (**VERIFY AT BUILD** before scheduling anything frequent).

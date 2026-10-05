@@ -1,0 +1,9 @@
+dist
+node_modules
+.wrangler
+coverage
+pnpm-lock.yaml
+apps/api/drizzle
+**/worker-configuration.d.ts
+docs
+CLAUDE.md

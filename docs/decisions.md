@@ -83,8 +83,8 @@ These become searchable/filterable columns on the Admin Dashboard alongside the 
 
 ### D11 — Domain
 **Status: PARTIALLY ANSWERED.** No domain yet; one will be bought before go-live. Until then:
-- Cookies: use `SameSite=None; Secure` between the default `*.pages.dev` (frontend) and `*.onrender.com` (backend) hosts — this works over HTTPS but is weaker and more fragile than a same-site setup (some browsers restrict cross-site cookies further over time).
-- Once the domain exists, point `app.<domain>` at Cloudflare Pages and `api.<domain>` at Render (both support free custom domains/CNAMEs), switch the cookie to `SameSite=Lax`, and re-verify login still works.
+- Cookies: use `SameSite=None; Secure` between the default `*.workers.dev` (frontend) and `*.onrender.com` (backend) hosts — this works over HTTPS but is weaker and more fragile than a same-site setup (some browsers restrict cross-site cookies further over time).
+- Once the domain exists, point `app.<domain>` at the Cloudflare Worker `docflow` (custom domain) and `api.<domain>` at Render (both support free custom domains/CNAMEs), switch the cookie to `SameSite=Lax`, and re-verify login still works.
 - Email deliverability (Phase 5) also needs the domain, for SPF/DKIM records with Brevo/Resend.
 **Not a blocker for Phases 0–4.** Blocks Phase 5 (real email) and should be done before go-live (Phase 8).
 
@@ -110,3 +110,25 @@ So "as many as possible for free" resolves to **file storage as the real ceiling
 - **Status label for parallel groups:** use "Pending Approver (Position N)" regardless of how many approvers share position N; never list names in the label.
 - **URS "Id" field:** becomes the optional `employee_code` field (login is by email, per D4).
 - **Still unconfirmed, carried forward (do not block on them):** D6 exact invoice field list and the 2-non-CFO-approver minimum on customised chains (needed by Phase 3); file type/size rule (Phase 3); D7 Export/stat cards (Phase 6).
+
+---
+
+### D15 — Hosting as built (Phase 1, 5 Oct 2026)
+**Status: ANSWERED (owner set up the accounts; reconciled against current provider docs).** Where this differs from earlier plan text, this entry wins.
+
+- **Email provider: Brevo** (not Resend). `EMAIL_PROVIDER=brevo` is the default.
+- **Frontend: Cloudflare Workers static assets, not Cloudflare Pages.** An assets-only Worker named `docflow`, with no Worker script. It is deployed by Workers Builds (Cloudflare's git integration) with root directory `apps/web`, build command `pnpm install && pnpm build`, and deploy command `npx wrangler deploy`. Config lives in `apps/web/wrangler.jsonc`, and its `name` must match the dashboard Worker name or the build fails. URL: `docflow.<subdomain>.workers.dev`.
+  - `VITE_API_BASE_URL` must be a **build** variable (Settings → Build), because runtime variables aren't visible to `vite build`.
+  - The build image defaults to pnpm 10, so the build variable `PNPM_VERSION=12.9.1` is required.
+- **Cron worker:** a second Workers Builds project, `docflow-cron`, with root directory `infra/cron-worker`. It runs every 20 minutes, and `workers_dev` is off (cron only, no public URL). Its secret `TICK_SECRET` has the same value as the API's `TICK_SHARED_SECRET`.
+- **API: Render free web service `docflow`.** Render can't see files outside a service's Root Directory, so the service builds from the **repo root**:
+  - Root Directory: empty
+  - Dockerfile Path: `./apps/api/Dockerfile`
+  - Docker Build Context: `.`
+  - Build Filters: `apps/api/**`, `packages/shared/**`, `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`
+  - Health check: `/healthz`
+- **Migrations run on container start** (`node dist/migrate.js && node dist/server.js`) over `DATABASE_URL_DIRECT`, guarded by a Postgres advisory lock. The free tier has no Pre-Deploy Command.
+- **No GitHub deploy workflows.** Both hosts deploy from their own git integrations on push to `main`, and GitHub Actions runs CI only (`.github/workflows/ci.yml`). Nightly backup (`backup.yml`) is still planned for Phase 7.
+- **One environment, no staging yet.** plan.md §6 assumed staging plus a production approval gate. Add a separate Neon branch and Render service for staging before real data goes in (Phase 7/8).
+- **Neon:** Singapore region (Render and Cloudflare regions are the owner's choice). The pooled string serves runtime queries and the direct string serves migrations.
+- **Backblaze B2** endpoint `s3.eu-central-003.backblazeb2.com` (region `eu-central-003`), private bucket with a scoped key. Not used by code until Phase 3.

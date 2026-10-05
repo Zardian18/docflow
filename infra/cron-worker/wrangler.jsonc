@@ -1,0 +1,22 @@
+{
+  // Cron-only Worker: calls the API's /internal/tick to retry failed email
+  // sends (plan.md §2.4). A safety net, NOT a keep-alive.
+  // `name` must match the Worker name in the Cloudflare dashboard.
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "docflow-cron",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-05",
+  "workers_dev": false,
+  "triggers": {
+    "crons": ["*/20 * * * *"],
+  },
+  "vars": {
+    "API_TICK_URL": "https://docflow.onrender.com/internal/tick",
+  },
+  "observability": {
+    "enabled": true,
+  },
+  // Secret (not in this file): TICK_SECRET, same value as the API's TICK_SHARED_SECRET.
+  //   Production: Worker > Settings > Variables and Secrets, or `wrangler secret put TICK_SECRET`
+  //   Local: infra/cron-worker/.dev.vars (gitignored)
+}

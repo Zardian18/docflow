@@ -22,10 +22,30 @@ If `docs/decisions.md` says a decision is still `OPEN` and the task in front of 
 - When Figma has no design for a screen, reuse the existing tokens/components and tell the owner what you invented.
 
 ## Layout
-`apps/web` React SPA → **Cloudflare Pages** · `apps/api` Fastify API in Docker → **Render** free web service · `packages/shared` zod schemas and enums used by both · `infra/cron-worker` Cloudflare Worker calling `/internal/tick` on a cron trigger (retry safety net, not a keep-alive — see invariant 10) · `docs/`
+`apps/web` React SPA → **Cloudflare Workers static assets** (Worker `docflow`) · `apps/api` Fastify API in Docker → **Render** free web service · `packages/shared` zod schemas and enums used by both · `infra/cron-worker` Cloudflare Worker `docflow-cron` calling `/internal/tick` on a cron trigger (retry safety net, not a keep-alive — see invariant 10) · `docs/`
+
+Deploys happen through each host's own git integration on push to `main` (Render; Cloudflare Workers Builds). GitHub Actions only runs CI. Hosting details and dashboard settings: `docs/decisions.md` D15.
 
 ## Commands
-_Fill in during Phase 1 (install, dev, test, lint, typecheck, build, migrate, seed)._
+pnpm 12 via corepack (`corepack enable`, or `corepack pnpm …` if the shims can't be installed). Node 24+. Local config: root `.env` (gitignored; see `.env.example`).
+
+| Task | Command |
+|---|---|
+| Install | `pnpm install` |
+| Typecheck / lint / format / test / build (all packages) | `pnpm typecheck` · `pnpm lint` · `pnpm format` (`format:check` in CI) · `pnpm test` · `pnpm build` |
+| API dev server (reads root `.env`) | `pnpm --filter @docflow/api dev` |
+| Generate a migration after editing `apps/api/src/db/schema.ts` | `pnpm --filter @docflow/api db:generate --name <name>` |
+| Apply migrations (direct URL) | `pnpm --filter @docflow/api db:migrate` (production runs this on container start) |
+| API DB integration tests | set `TEST_DATABASE_URL`, then `pnpm --filter @docflow/api test` (skipped without it; CI provides Postgres) |
+| Web dev server | `pnpm --filter @docflow/web dev` (set `VITE_API_BASE_URL`, e.g. `http://localhost:3000`) |
+| Add a shadcn component | `cd apps/web && pnpm dlx shadcn@4.21.1 add <name>` |
+| Cron worker locally | `pnpm --filter @docflow/cron-worker dev`, then `curl http://localhost:8787/cdn-cgi/local/scheduled` |
+| Regenerate Worker types after editing a `wrangler.jsonc` | `pnpm --filter @docflow/cron-worker types` |
+| Local Postgres (needs Docker) | `docker compose up -d` |
+
+No seed command yet (Phase 2).
+
+Version notes: TypeScript is pinned to 6.0.x because typescript-eslint doesn't support 7.x yet. pnpm only runs install scripts for packages listed under `allowBuilds` in `pnpm-workspace.yaml` (`pnpm approve-builds <pkg>`).
 
 ## Invariants that must never be broken
 1. Approval proceeds in strict step order. A step may have **one or more** approvers (a parallel group when more than one); every approver in the step must approve before the workflow advances. A pending document is never visible to an approver whose step hasn't been reached (API-enforced, not just UI).
@@ -46,9 +66,11 @@ _Fill in during Phase 1 (install, dev, test, lint, typecheck, build, migrate, se
 - Email goes over an HTTPS provider API (Brevo or Resend). **No SMTP** — Render blocks outbound ports 25/465/587.
 - **No always-on polling loop or job worker**, and no artificial "keep-alive ping" to Render either. Background work only runs from `POST /internal/tick`, triggered by the Cloudflare Worker cron every ~15–30 minutes, and its only job is retrying failed outbox rows (see invariant 10). Keeping Render artificially warm is both unsupported by Render and unnecessary given invariant 10.
 - The API is stateless with an ephemeral filesystem. Files live in Backblaze B2 via presigned URLs (S3-compatible API, same `@aws-sdk/client-s3` client as R2 would have used — only the endpoint/credentials differ); never proxy file bytes through the API.
-- Use a standard TCP Postgres driver on Neon's pooled endpoint (interactive transactions are required for invariant 6).
+- Use a standard TCP Postgres driver (`pg`) on Neon's pooled endpoint (interactive transactions are required for invariant 6; run every statement of a transaction on one `pool.connect()` client). PgBouncer transaction mode rejects session-level features (`SET`, `LISTEN`, session advisory locks), so migrations use the direct URL.
+- Render's free tier has no pre-deploy command: migrations run at container start, under a Postgres advisory lock.
 - Keep storage, email, and DB access behind interfaces so the provider can be swapped by configuration alone.
-- Frontend is on Cloudflare Pages, not Vercel — Vercel's free Hobby plan forbids commercial use (explicitly including a paid consultant writing the code), which this project is. Cloudflare Pages is confirmed free, no card, and commercial use is explicitly allowed.
+- Frontend is on Cloudflare (Workers static assets, an assets-only Worker), not Vercel — Vercel's free Hobby plan forbids commercial use (explicitly including a paid consultant writing the code), which this project is. Cloudflare's free plan needs no card and allows commercial use.
+- `VITE_*` values are baked in at build time, so on Cloudflare they must be **build** variables, not runtime variables.
 
 ## Definition of done (every task)
 Types check, lint clean, tests pass in CI, migrations included and reversible-in-practice, no secrets or PII in logs, `docs/decisions.md` updated (never `docs/URS.md`) if a new decision was made along the way, and `CLAUDE.md` updated if a command or invariant changed.

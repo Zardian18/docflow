@@ -1,4 +1,9 @@
 packages:
-  - "apps/*"
-  - "packages/*"
-  - "infra/*"
+  - 'apps/*'
+  - 'packages/*'
+  - 'infra/*'
+allowBuilds:
+  esbuild: true
+  workerd: true
+minimumReleaseAgeExclude:
+  - pino-pretty@13.2.0
