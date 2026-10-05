@@ -1,0 +1,13 @@
+**/node_modules
+**/dist
+**/.wrangler
+**/coverage
+.git
+.github
+.env
+.env.*
+**/.dev.vars*
+.neon
+apps/web
+infra
+docs
