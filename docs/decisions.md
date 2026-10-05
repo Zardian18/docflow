@@ -102,3 +102,11 @@ These become searchable/filterable columns on the Admin Dashboard alongside the 
 - **Database:** Neon's 0.5 GB free tier holds workflow/audit metadata (a few KB per workflow) for tens of thousands of workflows — storage here is not the limiting factor.
 - **Email:** Brevo's 300/day (or Resend's 100/day) supports roughly 40–60 completed multi-approver workflows per day before hitting the cap, comfortably above what 50 users are likely to generate.
 So "as many as possible for free" resolves to **file storage as the real ceiling**, at roughly 1,000+ documents before Backblaze's free tier needs topping up (still cardless to start, cost only kicks in past 10 GB).
+
+---
+
+### Phase 0 follow-ups (owner, confirmed after the skeleton was built)
+- **D2 (final):** the CFO receives the completion confirmation email even when they are the approving actor. Not to be revisited.
+- **Status label for parallel groups:** use "Pending Approver (Position N)" regardless of how many approvers share position N; never list names in the label.
+- **URS "Id" field:** becomes the optional `employee_code` field (login is by email, per D4).
+- **Still unconfirmed, carried forward (do not block on them):** D6 exact invoice field list and the 2-non-CFO-approver minimum on customised chains (needed by Phase 3); file type/size rule (Phase 3); D7 Export/stat cards (Phase 6).

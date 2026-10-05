@@ -9,7 +9,7 @@ These files should exist at the paths below. **If any of them are missing, that 
 - `docs/URS.md` — the client's original requirements. **Never edit this file.** Where the project has deliberately deviated from it, the deviation is recorded in `docs/decisions.md`, not by changing this file.
 - `docs/decisions.md` — the owner's answers to every open question, dated. **This is the source of truth whenever it conflicts with `docs/URS.md`.**
 - `docs/plan.md` — architecture, hosting, schema, and the phase-by-phase build plan. Read the whole file, not just the phase you're on; later phases assume earlier sections.
-- Figma file `WxKMZgyyYg9RVUIYDfuzhq`, page "App Screens" — node IDs for each of the 9 designed screens are listed in `docs/plan.md`'s v0.1 content (§1.1). Several required screens aren't designed at all (Employee/Role masters, History pages, the admin audit-trail detail page, password reset) — build these from the same tokens/components as the designed screens and say what you invented.
+- Figma file `WxKMZgyyYg9RVUIYDfuzhq`, page "App Screens" — node IDs for each of the 9 designed screens are listed in `docs/plan.md` v0.2 §1.1. Several required screens aren't designed at all (Employee/Role masters, History pages, the admin audit-trail detail page, password reset) — build these from the same tokens/components as the designed screens and say what you invented.
 
 If `docs/decisions.md` says a decision is still `OPEN` and the task in front of you needs it, **stop and ask**, don't pick an answer yourself.
 
@@ -37,7 +37,7 @@ _Fill in during Phase 1 (install, dev, test, lint, typecheck, build, migrate, se
 7. `audit_events` is append-only. Employees and roles are deactivated, never deleted.
 8. Emails contain links, never the document, and there is no approve-from-email action.
 9. All timestamps stored in UTC.
-10. **Notification sends are synchronous and best-effort, fired immediately after the transaction in step 6 commits, inside the same request that caused the event.** The cron tick only retries rows still `pending`/`failed`; it is a safety net for provider hiccups, not the primary delivery path, and it must never be the *only* place a send is attempted. (Reasoning: every event that needs an email happens inside a live request from a logged-in person, so the server is never asleep at the moment it matters — see `docs/plan.md` §2.2.)
+10. **Notification sends are synchronous and best-effort, fired immediately after the transaction in step 6 commits, inside the same request that caused the event.** The cron tick only retries rows still `pending`/`failed`; it is a safety net for provider hiccups, not the primary delivery path, and it must never be the *only* place a send is attempted. (Reasoning: every event that needs an email happens inside a live request from a logged-in person, so the server is never asleep at the moment it matters — see `docs/plan.md` §2.4.)
 11. Only employees whose role has `permission = APPROVER` can be selected in a company's default approver list or a Creator's per-document "add approver" search. Creator-permission employees never appear there, which is what makes self-approval structurally impossible, not just a UI rule.
 12. Login authenticates by `employees.email`, not an employee code.
 
