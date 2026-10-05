@@ -58,11 +58,11 @@ Inputs: `URS.md` (converted from the client's URS.docx v1.0, 25 Aug 2026), the F
 
 ```
  Browser ──HTTPS──► Cloudflare Worker (static assets) ── React SPA ── app.<domain-once-bought>
-    │                                    (today: docflow.<subdomain>.workers.dev)
+    │                                    (today: docflow.harddik2002.workers.dev)
     │ HTTPS + session cookie
     ▼
  API: Node + Fastify in a Docker container ── Render (free web service)
-    │                                          (today: <service>.onrender.com)
+    │                                          (today: docflow-xayj.onrender.com)
     ├──► Postgres (Neon, pooled TCP connection)
     ├──► Object storage: Backblaze B2 via the S3-compatible API
     │       browser uploads/downloads DIRECTLY with short-lived presigned URLs

@@ -129,6 +129,7 @@ So "as many as possible for free" resolves to **file storage as the real ceiling
   - Health check: `/healthz`
 - **Migrations run on container start** (`node dist/migrate.js && node dist/server.js`) over `DATABASE_URL_DIRECT`, guarded by a Postgres advisory lock. The free tier has no Pre-Deploy Command.
 - **No GitHub deploy workflows.** Both hosts deploy from their own git integrations on push to `main`, and GitHub Actions runs CI only (`.github/workflows/ci.yml`). Nightly backup (`backup.yml`) is still planned for Phase 7.
+- **Live URLs (5 Oct 2026):** web `https://docflow.harddik2002.workers.dev`, API `https://docflow-xayj.onrender.com`. Render suffixes subdomains that are already taken: `docflow.onrender.com` belongs to another account, so always copy the URL from the dashboard. Changing a Cloudflare build variable does not trigger a rebuild; push a commit or use "Retry build".
 - **One environment, no staging yet.** plan.md §6 assumed staging plus a production approval gate. Add a separate Neon branch and Render service for staging before real data goes in (Phase 7/8).
 - **Neon:** Singapore region (Render and Cloudflare regions are the owner's choice). The pooled string serves runtime queries and the direct string serves migrations.
 - **Backblaze B2** endpoint `s3.eu-central-003.backblazeb2.com` (region `eu-central-003`), private bucket with a scoped key. Not used by code until Phase 3.
