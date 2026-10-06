@@ -1,11 +1,13 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import cookie, { type CookieSerializeOptions } from '@fastify/cookie';
+import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
+import rateLimit from '@fastify/rate-limit';
 import { PingResponse } from '@docflow/shared';
 import { sql } from 'drizzle-orm';
 import Fastify from 'fastify';
 import {
+  hasZodFastifySchemaValidationErrors,
   serializerCompiler,
   validatorCompiler,
   type ZodTypeProvider,
@@ -13,24 +15,22 @@ import {
 import { z } from 'zod';
 import type { Db } from './db/client.js';
 import type { Env } from './env.js';
+import { AppError } from './errors.js';
+import { authPlugin } from './plugins/auth.js';
+import { csrfPlugin } from './plugins/csrf.js';
+import { authRoutes } from './routes/auth.js';
+import { companyRoutes } from './routes/companies.js';
+import type { Limits } from './routes/deps.js';
+import { employeeRoutes } from './routes/employees.js';
+import { roleRoutes } from './routes/roles.js';
 
 export interface AppDeps {
   env: Env;
   db: Db;
+  limits?: Partial<Limits>;
 }
 
-/**
- * Session cookie attributes. Web (*.workers.dev) and API (*.onrender.com) are
- * cross-site until a real domain exists, so SameSite=None; Secure (plan.md §2.3).
- */
-export function sessionCookieOptions(env: Env): CookieSerializeOptions {
-  return {
-    httpOnly: true,
-    secure: true,
-    sameSite: env.SESSION_COOKIE_SAMESITE,
-    path: '/',
-  };
-}
+const TICK_PATH = '/internal/tick';
 
 function secretsMatch(provided: string | undefined, expected: string): boolean {
   if (!provided) return false;
@@ -40,7 +40,9 @@ function secretsMatch(provided: string | undefined, expected: string): boolean {
   return timingSafeEqual(a, b);
 }
 
-export async function buildApp({ env, db }: AppDeps) {
+export async function buildApp({ env, db, limits: limitOverrides }: AppDeps) {
+  const limits: Limits = { authAttemptsPerMinute: 5, ...limitOverrides };
+
   const app = Fastify({
     logger: {
       level: env.LOG_LEVEL,
@@ -53,9 +55,49 @@ export async function buildApp({ env, db }: AppDeps) {
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
 
+  app.setErrorHandler((error, request, reply) => {
+    if (error instanceof AppError) {
+      return reply
+        .code(error.statusCode)
+        .send({ error: error.code, message: error.message, details: error.details });
+    }
+    if (hasZodFastifySchemaValidationErrors(error)) {
+      return reply.code(400).send({
+        error: 'VALIDATION',
+        message: 'Some fields are invalid',
+        details: error.validation.map((v) => ({
+          path: v.instancePath,
+          message: v.message,
+        })),
+      });
+    }
+    const statusCode = (error as { statusCode?: number }).statusCode ?? 500;
+    if (statusCode === 429) {
+      return reply.code(429).send({
+        error: 'RATE_LIMITED',
+        message: 'Too many attempts. Please wait a minute and try again.',
+      });
+    }
+    if (statusCode < 500) {
+      return reply
+        .code(statusCode)
+        .send({ error: 'BAD_REQUEST', message: (error as Error).message });
+    }
+    request.log.error({ err: error }, 'unhandled error');
+    return reply.code(500).send({ error: 'INTERNAL', message: 'Something went wrong' });
+  });
+
   await app.register(helmet);
-  await app.register(cors, { origin: env.WEB_ORIGIN, credentials: true });
+  await app.register(cors, {
+    origin: env.WEB_ORIGIN,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  });
   await app.register(cookie);
+  // Per-route limits only (auth endpoints); runs after body parsing so keys can use the email
+  await app.register(rateLimit, { global: false, hook: 'preHandler' });
+  await app.register(csrfPlugin, { webOrigin: env.WEB_ORIGIN, exemptPaths: [TICK_PATH] });
+  await app.register(authPlugin, { db });
 
   app.get(
     '/healthz',
@@ -78,9 +120,15 @@ export async function buildApp({ env, db }: AppDeps) {
     };
   });
 
+  const deps = { db, env, limits };
+  await app.register(authRoutes, { ...deps, prefix: '/v1/auth' });
+  await app.register(roleRoutes, { ...deps, prefix: '/v1/roles' });
+  await app.register(employeeRoutes, { ...deps, prefix: '/v1/employees' });
+  await app.register(companyRoutes, { ...deps, prefix: '/v1/companies' });
+
   // Retry tick, called by infra/cron-worker. Phase 5 adds the outbox retry logic.
   app.post(
-    '/internal/tick',
+    TICK_PATH,
     {
       schema: {
         response: {

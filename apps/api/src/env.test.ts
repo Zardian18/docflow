@@ -23,6 +23,10 @@ describe('loadEnv', () => {
     expect(() => loadEnv({})).toThrow(/DATABASE_URL[\s\S]*WEB_ORIGIN[\s\S]*TICK_SHARED_SECRET/);
   });
 
+  it('treats blank values as unset', () => {
+    expect(loadEnv({ ...valid, DATABASE_URL_DIRECT: '', PORT: '' }).PORT).toBe(3000);
+  });
+
   it('rejects a short tick secret', () => {
     expect(() => loadEnv({ ...valid, TICK_SHARED_SECRET: 'short' })).toThrow(/at least 32/);
   });

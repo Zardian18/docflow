@@ -42,8 +42,9 @@ pnpm 12 via corepack (`corepack enable`, or `corepack pnpm …` if the shims can
 | Cron worker locally | `pnpm --filter @docflow/cron-worker dev`, then `curl http://localhost:8787/cdn-cgi/local/scheduled` |
 | Regenerate Worker types after editing a `wrangler.jsonc` | `pnpm --filter @docflow/cron-worker types` |
 | Local Postgres (needs Docker) | `docker compose up -d` |
+| Create the first Admin (prints a one-time set-password link) | `pnpm --filter @docflow/api seed:admin --email <email> --name "<name>"` (needs `DATABASE_URL_DIRECT` and `WEB_ORIGIN` in `.env`) |
 
-No seed command yet (Phase 2).
+UI design reference: `docs/design/*.png` (the 9 Figma screens). Design tokens live in `apps/web/src/index.css`; reuse `PageHeader`, `ResponsiveTable`, `StatusPill` and `forms.tsx` for new screens, and check new pages at 375/768/1280/1440px with no clipping.
 
 Measured Render cold start: ~23–33 s for the first request after the service sleeps; warm ~0.2–0.5 s. The cron tick runs every 30 min so it does not act as a keep-alive (D15).
 

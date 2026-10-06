@@ -15,6 +15,11 @@ const EnvSchema = z.object({
 
   // None until a real domain exists (plan.md §2.3), then lax
   SESSION_COOKIE_SAMESITE: z.enum(['none', 'lax', 'strict']).default('none'),
+  SESSION_TTL_HOURS: z.coerce
+    .number()
+    .positive()
+    .max(24 * 30)
+    .default(12),
 
   // Shared with the cron worker's TICK_SECRET
   TICK_SHARED_SECRET: z.string().min(32, 'TICK_SHARED_SECRET must be at least 32 characters'),
@@ -24,7 +29,9 @@ export type Env = z.infer<typeof EnvSchema>;
 
 /** Parse and validate environment variables. Throws (listing every problem) if invalid. */
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
-  const result = EnvSchema.safeParse(source);
+  // A blank line like `DATABASE_URL_DIRECT=` in .env means "not set", not an empty value
+  const defined = Object.fromEntries(Object.entries(source).filter(([, v]) => v !== ''));
+  const result = EnvSchema.safeParse(defined);
   if (!result.success) {
     const problems = result.error.issues
       .map((issue) => `  ${issue.path.join('.')}: ${issue.message}`)
