@@ -29,7 +29,9 @@ export type Env = z.infer<typeof EnvSchema>;
 
 /** Parse and validate environment variables. Throws (listing every problem) if invalid. */
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
-  const result = EnvSchema.safeParse(source);
+  // A blank line like `DATABASE_URL_DIRECT=` in .env means "not set", not an empty value
+  const defined = Object.fromEntries(Object.entries(source).filter(([, v]) => v !== ''));
+  const result = EnvSchema.safeParse(defined);
   if (!result.success) {
     const problems = result.error.issues
       .map((issue) => `  ${issue.path.join('.')}: ${issue.message}`)

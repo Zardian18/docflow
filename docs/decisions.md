@@ -133,3 +133,31 @@ So "as many as possible for free" resolves to **file storage as the real ceiling
 - **One environment, no staging yet.** plan.md §6 assumed staging plus a production approval gate. Add a separate Neon branch and Render service for staging before real data goes in (Phase 7/8).
 - **Neon:** Singapore region (Render and Cloudflare regions are the owner's choice). The pooled string serves runtime queries and the direct string serves migrations.
 - **Backblaze B2** endpoint `s3.eu-central-003.backblazeb2.com` (region `eu-central-003`), private bucket with a scoped key. Not used by code until Phase 3.
+
+---
+
+### D16 — First Admin and initial passwords (before real email)
+**Status: ANSWERED (owner, 6 Oct 2026).**
+- **First Admin:** created with the seed command `pnpm --filter @docflow/api seed:admin --email … --name "…"`. It prints a one-time set-password link to that terminal only.
+- **Other employees:** when Admin adds an employee, the UI shows a one-time link to copy and send. Employee Master also has an "Invite link" / "Reset link" action on every active employee.
+- **Link validity:** links last 72 hours and work once. Issuing a new link cancels the previous one.
+- **No tokens in logs:** reset tokens never go into server logs.
+- **Self-service reset** ("Forgot password?") waits for real email in Phase 5. Until then that page tells people to ask their administrator.
+
+### D17 — Removing an approver who is in a default chain
+**Status: ANSWERED (owner, 6 Oct 2026).** Deactivating an employee, or moving them to a role whose permission isn't APPROVER, is **blocked** while they sit in any company's default chain. The error names the companies, and Admin edits those chains first. This keeps every saved chain valid. In-flight workflows are unaffected either way, because they use a snapshot (invariant 2).
+
+### D18 — Companies when no CFO exists
+**Status: ANSWERED (owner, 6 Oct 2026).** A company can be saved while there is no active CFO, and the chain editor shows a "No active CFO yet" warning. Phase 3 must block submission until a CFO exists.
+
+### D19 — Rules added during Phase 2 (my defaults; tell me if any are wrong)
+**Status: PROPOSED by Claude Code, built and tested (6 Oct 2026).**
+- **Fixed role permission:** a role's permission can't be changed after creation; create a new role instead. Changing it would silently change every holder's access and could break chains.
+- **Role deactivation:** built-in roles can't be deactivated, and neither can a role that still has active employees.
+- **Admin self-protection:** an Admin can't deactivate themself or remove their own Admin access. The last active Admin can't be removed.
+- **Passwords:** at least 12 characters, with no composition rules (NIST SP 800-63B).
+- **Sessions:** they last 12 hours (`SESSION_TTL_HOURS`). Changing your password signs out your other devices, and deactivation signs the person out immediately.
+- **Login rate limit:** 5 attempts per minute per IP and email.
+- **CSRF protection:** while the cookie is `SameSite=None`, every state-changing request must come from `WEB_ORIGIN` and be JSON. Otherwise it gets a 403.
+- **Step numbers:** they are renumbered 1..n on save (1,1,3 becomes 1,1,2). Gaps carry no meaning.
+- **Masters audit:** master-data changes are recorded in the server logs (actor and record IDs, no personal data) but not in `audit_events`, which stays workflow-scoped as in plan §4.1.
