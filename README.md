@@ -11,3 +11,5 @@ Document Approval Workflow Management System. A Creator uploads a document, pick
 Start with `CLAUDE.md`, then `docs/plan.md`, `docs/decisions.md` and `docs/URS.md` (the URS is never edited; deviations live in `decisions.md`).
 
 **Status:** Phase 1 (deployed walking skeleton). Requires Node 24+ and pnpm 12 (`corepack enable`). Commands are listed in `CLAUDE.md`; local config goes in a root `.env` (see `.env.example`).
+
+<!-- branch build test, safe to delete -->
