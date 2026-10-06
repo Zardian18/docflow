@@ -57,9 +57,10 @@ describe('field schemas', () => {
     expect(Email.parse('  A.Mehta@Example.COM ')).toBe('a.mehta@example.com');
   });
 
-  it('enforces the 12-character password minimum', () => {
+  it('enforces the 8-character password minimum', () => {
     expect(Password.safeParse('short').success).toBe(false);
-    expect(Password.safeParse('a'.repeat(12)).success).toBe(true);
+    expect(Password.safeParse('a'.repeat(7)).success).toBe(false);
+    expect(Password.safeParse('a'.repeat(8)).success).toBe(true);
   });
 
   it('uppercases codes and turns blanks into null', () => {

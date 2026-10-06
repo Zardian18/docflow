@@ -169,7 +169,7 @@ describe.skipIf(!TEST_DB_URL)('auth', () => {
       await new Client(app).login('admin@docflow.test', 'a-brand-new-password');
     });
 
-    it('enforces the 12-character minimum', async () => {
+    it('enforces the 8-character minimum', async () => {
       const client = await new Client(app).login('admin@docflow.test');
       const res = await client.post('/v1/auth/change-password', {
         currentPassword: TEST_PASSWORD,

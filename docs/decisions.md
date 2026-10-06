@@ -155,7 +155,7 @@ So "as many as possible for free" resolves to **file storage as the real ceiling
 - **Fixed role permission:** a role's permission can't be changed after creation; create a new role instead. Changing it would silently change every holder's access and could break chains.
 - **Role deactivation:** built-in roles can't be deactivated, and neither can a role that still has active employees.
 - **Admin self-protection:** an Admin can't deactivate themself or remove their own Admin access. The last active Admin can't be removed.
-- **Passwords:** at least 12 characters, with no composition rules (NIST SP 800-63B).
+- **Passwords:** at least **8** characters (owner, 6 Oct 2026; I had proposed 12), with no composition rules (NIST SP 800-63B minimum).
 - **Sessions:** they last 12 hours (`SESSION_TTL_HOURS`). Changing your password signs out your other devices, and deactivation signs the person out immediately.
 - **Login rate limit:** 5 attempts per minute per IP and email.
 - **CSRF protection:** while the cookie is `SameSite=None`, every state-changing request must come from `WEB_ORIGIN` and be JSON. Otherwise it gets a 403.

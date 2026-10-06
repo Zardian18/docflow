@@ -1,4 +1,4 @@
-import { ChangePasswordRequest } from '@docflow/shared';
+import { ChangePasswordRequest, PASSWORD_MIN_LENGTH } from '@docflow/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
@@ -56,7 +56,7 @@ export function ChangePasswordPage() {
           <Field
             label="New password"
             error={errors.newPassword?.message}
-            hint="At least 12 characters."
+            hint={`At least ${PASSWORD_MIN_LENGTH} characters.`}
           >
             {({ id, describedBy, invalid }) => (
               <PasswordInput

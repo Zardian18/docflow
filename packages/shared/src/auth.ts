@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { Permission } from './enums.js';
 
 /** NIST SP 800-63B style: length over composition rules. */
-export const PASSWORD_MIN_LENGTH = 12;
+export const PASSWORD_MIN_LENGTH = 8;
 export const PASSWORD_MAX_LENGTH = 256;
 
 export const Password = z
