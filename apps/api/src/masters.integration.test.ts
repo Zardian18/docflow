@@ -333,7 +333,8 @@ describe.skipIf(!TEST_DB_URL)('masters', () => {
       });
       const res = await admin.get('/v1/employees/approver-search?q=r');
       const names = res.json().map((e: { name: string }) => e.name);
-      expect(names).toEqual(['R. Shah', 'Rita Rao']);
+      // Order depends on the database collation, so compare as a set
+      expect([...names].sort()).toEqual(['R. Shah', 'Rita Rao']);
       expect(names).not.toContain('Rahul Creator');
     });
 
