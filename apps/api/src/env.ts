@@ -21,6 +21,9 @@ const EnvSchema = z.object({
     .max(24 * 30)
     .default(12),
 
+  // Set by Render on every deploy; reported by /healthz so a deploy can be verified
+  RENDER_GIT_COMMIT: z.string().optional(),
+
   // Shared with the cron worker's TICK_SECRET
   TICK_SHARED_SECRET: z.string().min(32, 'TICK_SHARED_SECRET must be at least 32 characters'),
 });

@@ -18,7 +18,7 @@ describe('GET /healthz', () => {
   it('returns ok without touching the database', async () => {
     const res = await app.inject({ method: 'GET', url: '/healthz' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ status: 'ok' });
+    expect(res.json()).toEqual({ status: 'ok', commit: null });
   });
 
   it('sends CORS headers for the configured web origin only', async () => {
