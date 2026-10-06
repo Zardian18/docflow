@@ -101,10 +101,12 @@ export async function buildApp({ env, db, limits: limitOverrides }: AppDeps) {
 
   app.get(
     '/healthz',
-    { schema: { response: { 200: z.object({ status: z.literal('ok') }) } } },
-    () => ({
-      status: 'ok' as const,
-    }),
+    {
+      schema: {
+        response: { 200: z.object({ status: z.literal('ok'), commit: z.string().nullable() }) },
+      },
+    },
+    () => ({ status: 'ok' as const, commit: env.RENDER_GIT_COMMIT?.slice(0, 7) ?? null }),
   );
 
   app.get('/v1/ping', { schema: { response: { 200: PingResponse } } }, async () => {
