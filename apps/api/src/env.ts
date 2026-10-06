@@ -15,6 +15,11 @@ const EnvSchema = z.object({
 
   // None until a real domain exists (plan.md §2.3), then lax
   SESSION_COOKIE_SAMESITE: z.enum(['none', 'lax', 'strict']).default('none'),
+  SESSION_TTL_HOURS: z.coerce
+    .number()
+    .positive()
+    .max(24 * 30)
+    .default(12),
 
   // Shared with the cron worker's TICK_SECRET
   TICK_SHARED_SECRET: z.string().min(32, 'TICK_SHARED_SECRET must be at least 32 characters'),

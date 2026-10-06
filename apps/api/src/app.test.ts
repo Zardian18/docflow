@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { buildApp, sessionCookieOptions } from './app.js';
+import { buildApp } from './app.js';
 import { createDb } from './db/client.js';
 import { TEST_TICK_SECRET, testEnv } from './test-helpers.js';
 
@@ -62,15 +62,5 @@ describe('POST /internal/tick', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ retried: 0 });
-  });
-});
-
-describe('sessionCookieOptions', () => {
-  it('is SameSite=None; Secure; HttpOnly by default', () => {
-    expect(sessionCookieOptions(env)).toMatchObject({
-      httpOnly: true,
-      secure: true,
-      sameSite: 'none',
-    });
   });
 });

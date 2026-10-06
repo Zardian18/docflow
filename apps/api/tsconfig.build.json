@@ -3,5 +3,5 @@
   "compilerOptions": {
     "declaration": false
   },
-  "exclude": ["src/**/*.test.ts", "src/test-helpers.ts"]
+  "exclude": ["src/**/*.test.ts", "src/test-helpers.ts", "src/test-db.ts"]
 }
