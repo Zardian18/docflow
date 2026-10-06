@@ -120,7 +120,7 @@ So "as many as possible for free" resolves to **file storage as the real ceiling
 - **Frontend: Cloudflare Workers static assets, not Cloudflare Pages.** An assets-only Worker named `docflow`, with no Worker script. It is deployed by Workers Builds (Cloudflare's git integration) with root directory `apps/web`, build command `pnpm install && pnpm build`, and deploy command `npx wrangler deploy`. Config lives in `apps/web/wrangler.jsonc`, and its `name` must match the dashboard Worker name or the build fails. URL: `docflow.<subdomain>.workers.dev`.
   - `VITE_API_BASE_URL` must be a **build** variable (Settings → Build), because runtime variables aren't visible to `vite build`.
   - The build image defaults to pnpm 10, so the build variable `PNPM_VERSION=12.9.1` is required.
-- **Cron worker:** a second Workers Builds project, `docflow-cron`, with root directory `infra/cron-worker`. It runs every 20 minutes, and `workers_dev` is off (cron only, no public URL). Its secret `TICK_SECRET` has the same value as the API's `TICK_SHARED_SECRET`.
+- **Cron worker:** a second Workers Builds project, `docflow-cron`, with root directory `infra/cron-worker`. It runs every **30** minutes (changed from 20 on 6 Oct 2026: measured on 6 Oct, a 20-minute tick kept Render awake permanently, because Render did not sleep after 18 min idle; that made the tick a de-facto keep-alive using ~744 of the 750 free hours a month), and `workers_dev` is off (cron only, no public URL). Its secret `TICK_SECRET` has the same value as the API's `TICK_SHARED_SECRET`.
 - **API: Render free web service `docflow`.** Render can't see files outside a service's Root Directory, so the service builds from the **repo root**:
   - Root Directory: empty
   - Dockerfile Path: `./apps/api/Dockerfile`

@@ -8,7 +8,7 @@
   "compatibility_date": "2026-10-05",
   "workers_dev": false,
   "triggers": {
-    "crons": ["*/20 * * * *"],
+    "crons": ["*/30 * * * *"],
   },
   "vars": {
     "API_TICK_URL": "https://docflow-xayj.onrender.com/internal/tick",

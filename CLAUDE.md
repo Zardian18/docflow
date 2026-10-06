@@ -45,6 +45,8 @@ pnpm 12 via corepack (`corepack enable`, or `corepack pnpm …` if the shims can
 
 No seed command yet (Phase 2).
 
+Measured Render cold start: ~23–33 s for the first request after the service sleeps; warm ~0.2–0.5 s. The cron tick runs every 30 min so it does not act as a keep-alive (D15).
+
 Version notes: TypeScript is pinned to 6.0.x because typescript-eslint doesn't support 7.x yet. pnpm only runs install scripts for packages listed under `allowBuilds` in `pnpm-workspace.yaml` (`pnpm approve-builds <pkg>`).
 
 ## Invariants that must never be broken
