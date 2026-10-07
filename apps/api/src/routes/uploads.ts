@@ -4,7 +4,7 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { uploads } from '../db/schema.js';
 import { currentUser, requirePermission } from '../plugins/auth.js';
 import type { StorageService } from '../storage/storage.js';
-import type { RouteDeps } from './deps.js';
+import { perUserLimit, type RouteDeps } from './deps.js';
 
 /** How long the browser has to start the PUT. */
 const UPLOAD_URL_SECONDS = 10 * 60;
@@ -13,7 +13,7 @@ const UPLOAD_RECORD_HOURS = 24;
 
 export const uploadRoutes: FastifyPluginAsyncZod<RouteDeps & { storage: StorageService }> = async (
   app,
-  { db, storage },
+  { db, storage, limits },
 ) => {
   app.addHook('onRequest', requirePermission('CREATOR'));
 
@@ -21,7 +21,10 @@ export const uploadRoutes: FastifyPluginAsyncZod<RouteDeps & { storage: StorageS
   // The URL is signed for this exact type and size, so storage refuses anything else (D20).
   app.post(
     '/presign',
-    { schema: { body: PresignRequest, response: { 200: PresignResponse } } },
+    {
+      config: perUserLimit(limits.userActionsPerMinute),
+      schema: { body: PresignRequest, response: { 200: PresignResponse } },
+    },
     async (request) => {
       const user = currentUser(request);
       const { fileName, contentType, size } = request.body;

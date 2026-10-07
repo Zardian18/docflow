@@ -1,5 +1,6 @@
 import type { Readable } from 'node:stream';
 import {
+  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -88,6 +89,16 @@ export function createB2Storage(config: B2Config): StorageService {
     async stream(key) {
       const res = await s3.send(new GetObjectCommand({ Bucket, Key: key }));
       return res.Body as Readable;
+    },
+
+    async copy(fromKey, toKey) {
+      await s3.send(
+        new CopyObjectCommand({
+          Bucket,
+          Key: toKey,
+          CopySource: `${Bucket}/${fromKey.split('/').map(encodeURIComponent).join('/')}`,
+        }),
+      );
     },
 
     async delete(key) {

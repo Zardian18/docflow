@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { WorkflowCreate } from '@docflow/shared';
 import { and, eq, gt, isNull } from 'drizzle-orm';
 import type { z } from 'zod';
@@ -58,31 +58,9 @@ export async function submitWorkflow(
     );
   }
 
-  // ---- The stored object: present, exact size, and the right kind of file
-  const info = await storage.head(upload.objectKey);
-  if (!info) {
+  // ---- The stored object must have arrived before anything else is checked
+  if (!(await storage.head(upload.objectKey))) {
     throw fileProblem('UPLOAD_INCOMPLETE', 'The file did not finish uploading. Upload it again.');
-  }
-  const discard = async (problem: AppError) => {
-    await storage.delete(upload.objectKey);
-    return problem;
-  };
-  if (info.size !== upload.fileSize) {
-    throw await discard(
-      fileProblem(
-        'FILE_SIZE_MISMATCH',
-        'The uploaded file does not match what was selected. Upload it again.',
-      ),
-    );
-  }
-  const head = await storage.readRange(upload.objectKey, 0, 7);
-  if (!signatureMatches(upload.fileMime, head)) {
-    throw await discard(
-      fileProblem(
-        'FILE_TYPE_MISMATCH',
-        'This file is not a valid PDF or DOCX document, even though its name says so.',
-      ),
-    );
   }
 
   // ---- Company, CFO and chain (plan.md §4.7)
@@ -113,10 +91,45 @@ export async function submitWorkflow(
   const defaults = (await defaultApproversFor(db, [company.id])).get(company.id) ?? [];
   const chainCustomised = chainsDiffer(chain, defaults);
   const cfoPosition = Math.max(...chain.map((a) => a.position)) + 1;
-  const fileSha256 = await sha256Of(storage, upload.objectKey);
+  // ---- The stored object. The Creator's upload URL stays usable for a few minutes, so the
+  // file is copied to a key no one else can write to and every check runs on that copy:
+  // what was verified is exactly what the approvers will open (Phase 7 finding 2).
+  const workflowId = randomUUID();
+  const fileKey = `documents/${workflowId}`;
+  await storage.copy(upload.objectKey, fileKey);
+  const dropCopy = () => storage.delete(fileKey).catch(() => undefined);
+  const discard = async (problem: AppError) => {
+    await Promise.all([dropCopy(), storage.delete(upload.objectKey).catch(() => undefined)]);
+    return problem;
+  };
+  const info = await storage.head(fileKey);
+  if (info?.size !== upload.fileSize) {
+    throw await discard(
+      fileProblem(
+        'FILE_SIZE_MISMATCH',
+        'The uploaded file does not match what was selected. Upload it again.',
+      ),
+    );
+  }
+  const head = await storage.readRange(fileKey, 0, 7);
+  if (!signatureMatches(upload.fileMime, head)) {
+    throw await discard(
+      fileProblem(
+        'FILE_TYPE_MISMATCH',
+        'This file is not a valid PDF or DOCX document, even though its name says so.',
+      ),
+    );
+  }
+  let fileSha256: string;
+  try {
+    fileSha256 = await sha256Of(storage, fileKey);
+  } catch (err) {
+    await dropCopy();
+    throw err;
+  }
 
   try {
-    return await db.transaction(async (tx) => {
+    const result = await db.transaction(async (tx) => {
       // Claim the upload first: a concurrent second submit finds nothing to claim
       const claimed = await tx
         .update(uploads)
@@ -126,30 +139,27 @@ export async function submitWorkflow(
       if (claimed.length === 0)
         throw conflict('ALREADY_SUBMITTED', 'This document was already submitted.');
 
-      const [workflow] = await tx
-        .insert(workflows)
-        .values({
-          uploadId: upload.id,
-          title: upload.fileName,
-          fileKey: upload.objectKey,
-          fileName: upload.fileName,
-          fileMime: upload.fileMime,
-          fileSize: upload.fileSize,
-          fileSha256,
-          companyId: company.id,
-          createdBy: creatorId,
-          status: 'PENDING_APPROVER',
-          currentPosition: 1,
-          chainCustomised,
-          invoiceNumber: input.invoiceNumber,
-          vendorName: input.vendorName,
-          invoiceDate: input.invoiceDate,
-          amount: input.amount,
-          currency: input.currency,
-          notes: input.notes,
-        })
-        .returning({ id: workflows.id });
-      const workflowId = workflow!.id;
+      await tx.insert(workflows).values({
+        id: workflowId,
+        uploadId: upload.id,
+        title: upload.fileName,
+        fileKey,
+        fileName: upload.fileName,
+        fileMime: upload.fileMime,
+        fileSize: upload.fileSize,
+        fileSha256,
+        companyId: company.id,
+        createdBy: creatorId,
+        status: 'PENDING_APPROVER',
+        currentPosition: 1,
+        chainCustomised,
+        invoiceNumber: input.invoiceNumber,
+        vendorName: input.vendorName,
+        invoiceDate: input.invoiceDate,
+        amount: input.amount,
+        currency: input.currency,
+        notes: input.notes,
+      });
 
       await tx.insert(workflowSteps).values([
         ...chain.map((a) => ({
@@ -200,7 +210,11 @@ export async function submitWorkflow(
       );
       return { id: workflowId, outboxIds };
     });
+    // The upload copy has done its job; a leftover is cleaned up by the tick or B2 lifecycle
+    await storage.delete(upload.objectKey).catch(() => undefined);
+    return result;
   } catch (err) {
+    await dropCopy();
     if (isUniqueViolation(err, 'workflows_upload_unique')) {
       throw conflict('ALREADY_SUBMITTED', 'This document was already submitted.');
     }

@@ -50,6 +50,12 @@ export class MemoryStorage implements StorageService {
     return Readable.from([obj.body]);
   }
 
+  async copy(fromKey: string, toKey: string) {
+    const obj = this.objects.get(fromKey);
+    if (!obj) throw new Error(`no object ${fromKey}`);
+    this.objects.set(toKey, { body: Buffer.from(obj.body), contentType: obj.contentType });
+  }
+
   async delete(key: string) {
     this.objects.delete(key);
     this.deleted.push(key);

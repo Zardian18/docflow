@@ -5,7 +5,8 @@ import { loadSession, type AuthUser } from '../auth/sessions.js';
 import type { Db } from '../db/client.js';
 import { forbidden, unauthorized } from '../errors.js';
 
-export const SESSION_COOKIE = 'df_session';
+// __Host- makes the browser refuse it unless Secure, Path=/ and host-only (Phase 7 finding 10)
+export const SESSION_COOKIE = '__Host-df_session';
 
 declare module 'fastify' {
   interface FastifyRequest {

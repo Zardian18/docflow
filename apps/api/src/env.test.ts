@@ -32,6 +32,20 @@ describe('loadEnv', () => {
     expect(loadEnv({ ...valid, NODE_ENV: 'development' }).B2_BUCKET).toBeUndefined();
   });
 
+  it('normalises WEB_ORIGIN to a bare origin', () => {
+    expect(
+      loadEnv({ ...valid, WEB_ORIGIN: 'https://docflow.example.workers.dev/' }).WEB_ORIGIN,
+    ).toBe('https://docflow.example.workers.dev');
+    expect(loadEnv({ ...valid, WEB_ORIGIN: 'https://a.example/app?x=1' }).WEB_ORIGIN).toBe(
+      'https://a.example',
+    );
+  });
+
+  it('trusts the measured Render proxy hops by default', () => {
+    expect(loadEnv(valid).TRUSTED_PROXY_HOPS).toBe(3);
+    expect(loadEnv({ ...valid, TRUSTED_PROXY_HOPS: '0' }).TRUSTED_PROXY_HOPS).toBe(0);
+  });
+
   it('rejects a short tick secret', () => {
     expect(() => loadEnv({ ...valid, TICK_SHARED_SECRET: 'short' })).toThrow(/at least 32/);
   });
