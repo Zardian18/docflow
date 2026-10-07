@@ -107,6 +107,7 @@ export class Client {
   get = (url: string) => this.request('GET', url);
   post = (url: string, body: unknown = {}) => this.request('POST', url, body);
   put = (url: string, body: unknown) => this.request('PUT', url, body);
+  del = (url: string) => this.request('DELETE', url);
 
   async login(email: string, password = TEST_PASSWORD) {
     const res = await this.post('/v1/auth/login', { email, password });

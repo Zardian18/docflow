@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { RouterProvider } from 'react-router';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { ApiError, setUnauthorizedHandler } from '@/lib/api';
+import { ApiError, setForbiddenHandler, setUnauthorizedHandler } from '@/lib/api';
 import { meQueryKey } from '@/lib/auth';
 import { router } from '@/router';
 import './index.css';
@@ -23,6 +23,13 @@ const queryClient = new QueryClient({
 // Session expired or revoked mid-use: forget the user; protected routes then redirect to /login
 setUnauthorizedHandler(() => {
   queryClient.setQueryData(meQueryKey, null);
+});
+
+// A refusal usually means another tab signed in as someone else (tabs share one cookie).
+// Re-check who is signed in: AppShell announces a change and RequireAuth sends this tab to
+// the new user's home page, instead of leaving a page that can only fail.
+setForbiddenHandler(() => {
+  void queryClient.invalidateQueries({ queryKey: meQueryKey });
 });
 
 const root = document.getElementById('root');

@@ -5,6 +5,8 @@ import type { Db } from '../db/client.js';
 import { roles } from '../db/schema.js';
 import { conflict, isUniqueViolation, notFound } from '../errors.js';
 import { requirePermission } from '../plugins/auth.js';
+import { deleteRole } from '../domain/deletion.js';
+import { currentUser } from '../plugins/auth.js';
 import type { RouteDeps } from './deps.js';
 import { containsPattern, pageOffset, statusCondition } from './query-helpers.js';
 
@@ -104,4 +106,14 @@ export const roleRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db }) 
       return getRole(db, params.id);
     },
   );
+
+  // Only for custom roles nobody holds (D21)
+  app.delete('/:id', { schema: { params: IdParam } }, async (request, reply) => {
+    await deleteRole(db, request.params.id);
+    request.log.info(
+      { roleId: request.params.id, actorId: currentUser(request).id },
+      'role deleted',
+    );
+    return reply.code(204).send();
+  });
 };

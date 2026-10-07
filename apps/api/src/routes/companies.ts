@@ -6,6 +6,7 @@ import { companies, companyDefaultApprovers } from '../db/schema.js';
 import { checkChain, defaultApproversFor } from '../domain/chain.js';
 import { conflict, isUniqueViolation, notFound } from '../errors.js';
 import { currentUser, requirePermission } from '../plugins/auth.js';
+import { deleteCompany } from '../domain/deletion.js';
 import type { RouteDeps } from './deps.js';
 import { containsPattern, pageOffset, statusCondition } from './query-helpers.js';
 
@@ -144,4 +145,14 @@ export const companyRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db 
       return getCompany(db, params.id);
     },
   );
+
+  // Only for companies no document was ever submitted for (D21)
+  app.delete('/:id', { schema: { params: IdParam } }, async (request, reply) => {
+    await deleteCompany(db, request.params.id);
+    request.log.info(
+      { companyId: request.params.id, actorId: currentUser(request).id },
+      'company deleted',
+    );
+    return reply.code(204).send();
+  });
 };

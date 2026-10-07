@@ -17,6 +17,8 @@ import type { DbOrTx, Tx } from '../db/client.js';
 import { companies, companyDefaultApprovers, employees, roles } from '../db/schema.js';
 import { AppError, conflict, isUniqueViolation, notFound } from '../errors.js';
 import { currentUser, requirePermission } from '../plugins/auth.js';
+import { deleteEmployee } from '../domain/deletion.js';
+import type { StorageService } from '../storage/storage.js';
 import type { RouteDeps } from './deps.js';
 import { containsPattern, pageOffset, statusCondition } from './query-helpers.js';
 
@@ -102,7 +104,9 @@ async function translateUniqueErrors<T>(db: DbOrTx, run: () => Promise<T>): Prom
   }
 }
 
-export const employeeRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db, env }) => {
+export const employeeRoutes: FastifyPluginAsyncZod<
+  RouteDeps & { storage: StorageService }
+> = async (app, { db, env, storage }) => {
   // onRequest, so unauthorised callers are refused before any input validation
   app.addHook('onRequest', requirePermission('ADMIN'));
 
@@ -251,4 +255,12 @@ export const employeeRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db
       return { url: link.url, expiresAt: link.expiresAt.toISOString() };
     },
   );
+
+  // Only for employees with no history (D21); everyone else is deactivated
+  app.delete('/:id', { schema: { params: IdParam } }, async (request, reply) => {
+    const actor = currentUser(request);
+    await deleteEmployee(db, storage, actor.id, request.params.id);
+    request.log.info({ employeeId: request.params.id, actorId: actor.id }, 'employee deleted');
+    return reply.code(204).send();
+  });
 };

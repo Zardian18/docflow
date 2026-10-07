@@ -7,6 +7,7 @@ import { Controller, useForm } from 'react-hook-form';
 import { Link, useNavigate, useParams } from 'react-router';
 import { toast } from 'sonner';
 import { z } from 'zod';
+import { DeleteButton } from '@/components/ConfirmDeleteDialog';
 import { Field, FormError } from '@/components/forms';
 import { PageBody, PageHeader } from '@/components/PageHeader';
 import { ErrorState } from '@/components/States';
@@ -197,6 +198,17 @@ function CompanyForm({ company }: { company: Company | null }) {
         </section>
 
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          {company && (
+            <DeleteButton
+              name={company.name}
+              what="company"
+              onDelete={() => api.companies.remove(company.id)}
+              onDeleted={() => {
+                queryClient.invalidateQueries({ queryKey: ['companies'] });
+                navigate('/admin/masters/companies');
+              }}
+            />
+          )}
           <Button type="button" variant="outline" asChild>
             <Link to="/admin/masters/companies">Cancel</Link>
           </Button>
