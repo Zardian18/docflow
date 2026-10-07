@@ -6,6 +6,8 @@ import { errorMessage } from '@/lib/api';
 import { HOME_BY_PERMISSION, RequireAuth } from '@/lib/auth';
 import { ChangePasswordPage } from '@/pages/account/ChangePasswordPage';
 import { CompaniesPage } from '@/pages/admin/companies/CompaniesPage';
+import { AdminDashboardPage } from '@/pages/admin/dashboard/AdminDashboardPage';
+import { AdminWorkflowPage } from '@/pages/admin/workflow/AdminWorkflowPage';
 import { CompanyFormPage } from '@/pages/admin/companies/CompanyFormPage';
 import { EmployeesPage } from '@/pages/admin/EmployeesPage';
 import { RolesPage } from '@/pages/admin/RolesPage';
@@ -16,7 +18,6 @@ import { SetPasswordPage } from '@/pages/auth/SetPasswordPage';
 import { MySubmissionsPage } from '@/pages/creator/MySubmissionsPage';
 import { NewSubmissionPage } from '@/pages/creator/NewSubmissionPage';
 import { SubmissionDetailPage } from '@/pages/creator/SubmissionDetailPage';
-import { PlaceholderPage } from '@/pages/PlaceholderPage';
 import { HistoryPage } from '@/pages/reviewer/HistoryPage';
 import { PendingPage } from '@/pages/reviewer/PendingPage';
 import { ReviewPage } from '@/pages/reviewer/ReviewPage';
@@ -70,14 +71,9 @@ export const router = createBrowserRouter([
             children: [
               {
                 path: '/admin',
-                element: (
-                  <PlaceholderPage
-                    title="Admin Dashboard"
-                    description="View and filter every workflow across all companies"
-                    note="Workflows will appear here once Creators start submitting documents. Meanwhile, set up companies, employees and roles in the masters."
-                  />
-                ),
+                element: <AdminDashboardPage />,
               },
+              { path: '/admin/workflows/:id', element: <AdminWorkflowPage /> },
               {
                 path: '/admin/masters',
                 element: <Navigate to="/admin/masters/companies" replace />,
