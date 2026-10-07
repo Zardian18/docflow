@@ -3,12 +3,17 @@ import {
   ApproverOption,
   CfoInfo,
   Company,
+  CompanyOption,
+  FileLink,
   Employee,
   Me,
   paginated,
   PasswordLink,
   PingResponse,
+  PresignResponse,
   Role,
+  WorkflowDetail,
+  WorkflowSummary,
   type ChangePasswordRequest,
   type CompanyUpsert,
   type EmployeeCreate,
@@ -17,9 +22,11 @@ import {
   type LoginRequest,
   type RoleCreate,
   type RoleUpdate,
+  type PresignRequest,
   type SetPasswordRequest,
+  type WorkflowCreate,
 } from '@docflow/shared';
-import type { z } from 'zod';
+import { z } from 'zod';
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/+$/, '') ?? '';
 
@@ -146,7 +153,64 @@ export const api = {
     update: (id: string, body: CompanyUpsert) =>
       request(`/v1/companies/${id}`, { method: 'PUT', body }).then((d) => Company.parse(d)),
   },
+  lookups: {
+    companies: (q: string, signal?: AbortSignal) =>
+      get(
+        z.object({ companies: CompanyOption.array(), cfo: CfoInfo.shape.cfo }),
+        `/v1/companies/search?q=${encodeURIComponent(q)}`,
+        signal,
+      ),
+  },
+
+  uploads: {
+    presign: (body: PresignRequest) =>
+      request('/v1/uploads/presign', { method: 'POST', body }).then((d) =>
+        PresignResponse.parse(d),
+      ),
+  },
+
+  workflows: {
+    create: (body: WorkflowCreate) =>
+      request('/v1/workflows', { method: 'POST', body }).then((d) =>
+        z.object({ id: z.uuid() }).parse(d),
+      ),
+    mine: (query: { page?: number; pageSize?: number }, signal?: AbortSignal) =>
+      get(paginated(WorkflowSummary), `/v1/workflows/mine?${listParams(query)}`, signal),
+    get: (id: string, signal?: AbortSignal) => get(WorkflowDetail, `/v1/workflows/${id}`, signal),
+    fileLink: (id: string) => get(FileLink, `/v1/workflows/${id}/file`),
+  },
 };
+
+/**
+ * PUTs a file straight to storage with the presigned URL (bytes never pass through the
+ * API). XHR rather than fetch, because only XHR reports upload progress.
+ */
+export function uploadToStorage(
+  file: File,
+  target: PresignResponse,
+  onProgress: (fraction: number) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', target.url);
+    for (const [name, value] of Object.entries(target.headers)) xhr.setRequestHeader(name, value);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(e.loaded / e.total);
+    };
+    xhr.onload = () =>
+      xhr.status >= 200 && xhr.status < 300
+        ? resolve()
+        : reject(new ApiError(xhr.status, 'UPLOAD_FAILED', 'The upload was refused. Try again.'));
+    xhr.onerror = () =>
+      reject(
+        new ApiError(0, 'UPLOAD_FAILED', 'The upload failed. Check your connection and try again.'),
+      );
+    xhr.onabort = () => reject(new DOMException('Upload cancelled', 'AbortError'));
+    signal?.addEventListener('abort', () => xhr.abort());
+    xhr.send(file);
+  });
+}
 
 /** A message safe to show the user for any thrown value. */
 export function errorMessage(err: unknown): string {

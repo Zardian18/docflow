@@ -168,19 +168,23 @@ function StepCard({
 }
 
 /**
- * The default approval chain editor. Steps run in order; people inside one step approve in
- * parallel. The CFO is always the fixed final step (invariant 4) and isn't editable here.
+ * Approval chain editor (Company Master defaults and a Creator's per-document chain).
+ * Steps run in order; people inside one step approve in parallel. The CFO is always the
+ * fixed final step (invariant 4) and isn't editable here.
  */
 export function ChainBuilder({
   steps,
   onChange,
   cfo,
   error,
+  noCfoMessage = 'You can save this company now, but documents can’t be submitted until an employee holds the CFO role.',
 }: {
   steps: ChainStep[];
   onChange: (steps: ChainStep[]) => void;
   cfo: CfoInfo['cfo'] | undefined;
   error?: string;
+  /** Explanation shown next to “No active CFO yet.” */
+  noCfoMessage?: string;
 }) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -272,8 +276,7 @@ export function ChainBuilder({
         >
           <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
           <span>
-            <span className="font-medium">No active CFO yet.</span> You can save this company now,
-            but documents can’t be submitted until an employee holds the CFO role.
+            <span className="font-medium">No active CFO yet.</span> {noCfoMessage}
           </span>
         </div>
       ) : (

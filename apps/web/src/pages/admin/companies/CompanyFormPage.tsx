@@ -21,7 +21,7 @@ import {
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api, errorMessage } from '@/lib/api';
-import { ChainBuilder, newStepKey, type ChainStep } from './ChainBuilder';
+import { ChainBuilder, newStepKey, type ChainStep } from '@/components/chain/ChainBuilder';
 
 const DetailsSchema = z.object({
   name: z.string().trim().min(1, 'Enter the company name').max(120),

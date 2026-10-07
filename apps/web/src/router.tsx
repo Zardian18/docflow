@@ -13,6 +13,9 @@ import { AuthCard } from '@/pages/auth/AuthCard';
 import { ForgotPasswordPage } from '@/pages/auth/ForgotPasswordPage';
 import { LoginPage } from '@/pages/auth/LoginPage';
 import { SetPasswordPage } from '@/pages/auth/SetPasswordPage';
+import { MySubmissionsPage } from '@/pages/creator/MySubmissionsPage';
+import { NewSubmissionPage } from '@/pages/creator/NewSubmissionPage';
+import { SubmissionDetailPage } from '@/pages/creator/SubmissionDetailPage';
 import { PlaceholderPage } from '@/pages/PlaceholderPage';
 
 function Allow({ permissions }: { permissions: Permission[] }) {
@@ -86,26 +89,9 @@ export const router = createBrowserRouter([
           {
             element: <Allow permissions={['CREATOR']} />,
             children: [
-              {
-                path: '/submit',
-                element: (
-                  <PlaceholderPage
-                    title="New Submission"
-                    description="Upload a document and route it through the approval chain"
-                    note="Document submission isn’t open yet. Your administrator will let you know when it is."
-                  />
-                ),
-              },
-              {
-                path: '/submissions',
-                element: (
-                  <PlaceholderPage
-                    title="My Submissions"
-                    description="Documents you have uploaded and their current status"
-                    note="You haven’t submitted any documents yet."
-                  />
-                ),
-              },
+              { path: '/submit', element: <NewSubmissionPage /> },
+              { path: '/submissions', element: <MySubmissionsPage /> },
+              { path: '/submissions/:id', element: <SubmissionDetailPage /> },
             ],
           },
           {

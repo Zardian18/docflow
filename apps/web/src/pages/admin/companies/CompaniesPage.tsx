@@ -10,7 +10,7 @@ import { ActivePill } from '@/components/StatusPill';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 import { MastersTabs } from '../MastersLayout';
-import { ChainSummary } from './ChainSummary';
+import { ChainSummary } from '@/components/chain/ChainSummary';
 
 export function CompaniesPage() {
   const list = useListState();
