@@ -46,6 +46,8 @@ pnpm 12 via corepack (`corepack enable`, or `corepack pnpm …` if the shims can
 
 UI design reference: `docs/design/*.png` (the 9 Figma screens). Design tokens live in `apps/web/src/index.css`; reuse `PageHeader`, `ResponsiveTable`, `StatusPill` and `forms.tsx` for new screens, and check new pages at 375/768/1280/1440px with no clipping.
 
+Files: `apps/api/src/storage/` (`StorageService`; B2 in production, `MemoryStorage` in tests). Presigned PUTs sign content-type and content-length, so B2 itself refuses a different type or size. The S3 client must keep `requestChecksumCalculation`/`responseChecksumValidation` at `WHEN_REQUIRED`, because the SDK defaults break browser uploads to B2. The bucket CORS rule (B2 operation names `s3_put`/`s3_get`/`s3_head`) allows the web origin and `http://localhost:5173`.
+
 Measured Render cold start: ~23–33 s for the first request after the service sleeps; warm ~0.2–0.5 s. The cron tick runs every 30 min so it does not act as a keep-alive (D15).
 
 Version notes: TypeScript is pinned to 6.0.x because typescript-eslint doesn't support 7.x yet. pnpm only runs install scripts for packages listed under `allowBuilds` in `pnpm-workspace.yaml` (`pnpm approve-builds <pkg>`).
