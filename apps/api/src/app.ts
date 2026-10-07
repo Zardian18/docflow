@@ -22,12 +22,48 @@ import { authRoutes } from './routes/auth.js';
 import { companyRoutes } from './routes/companies.js';
 import type { Limits } from './routes/deps.js';
 import { employeeRoutes } from './routes/employees.js';
+import { lookupRoutes } from './routes/lookups.js';
 import { roleRoutes } from './routes/roles.js';
+import { uploadRoutes } from './routes/uploads.js';
+import { workflowRoutes } from './routes/workflows.js';
+import { createB2Storage } from './storage/b2.js';
+import type { StorageService } from './storage/storage.js';
 
 export interface AppDeps {
   env: Env;
   db: Db;
   limits?: Partial<Limits>;
+  /** Defaults to Backblaze B2 from env; tests pass in-memory storage. */
+  storage?: StorageService;
+}
+
+/** Real storage when configured; otherwise every file operation fails with a clear 503. */
+function storageFromEnv(env: Env): StorageService {
+  const { B2_ENDPOINT, B2_REGION, B2_KEY_ID, B2_APPLICATION_KEY, B2_BUCKET } = env;
+  if (B2_ENDPOINT && B2_REGION && B2_KEY_ID && B2_APPLICATION_KEY && B2_BUCKET) {
+    return createB2Storage({
+      endpoint: B2_ENDPOINT,
+      region: B2_REGION,
+      keyId: B2_KEY_ID,
+      applicationKey: B2_APPLICATION_KEY,
+      bucket: B2_BUCKET,
+    });
+  }
+  const unavailable = async (): Promise<never> => {
+    throw new AppError(
+      503,
+      'STORAGE_UNAVAILABLE',
+      'File storage is not configured on this server.',
+    );
+  };
+  return {
+    presignPut: unavailable,
+    presignGet: unavailable,
+    head: unavailable,
+    readRange: unavailable,
+    stream: unavailable,
+    delete: unavailable,
+  };
 }
 
 const TICK_PATH = '/internal/tick';
@@ -40,7 +76,13 @@ function secretsMatch(provided: string | undefined, expected: string): boolean {
   return timingSafeEqual(a, b);
 }
 
-export async function buildApp({ env, db, limits: limitOverrides }: AppDeps) {
+export async function buildApp({
+  env,
+  db,
+  limits: limitOverrides,
+  storage: storageOverride,
+}: AppDeps) {
+  const storage = storageOverride ?? storageFromEnv(env);
   const limits: Limits = { authAttemptsPerMinute: 5, ...limitOverrides };
 
   const app = Fastify({
@@ -126,7 +168,10 @@ export async function buildApp({ env, db, limits: limitOverrides }: AppDeps) {
   await app.register(authRoutes, { ...deps, prefix: '/v1/auth' });
   await app.register(roleRoutes, { ...deps, prefix: '/v1/roles' });
   await app.register(employeeRoutes, { ...deps, prefix: '/v1/employees' });
+  await app.register(lookupRoutes, deps);
   await app.register(companyRoutes, { ...deps, prefix: '/v1/companies' });
+  await app.register(uploadRoutes, { ...deps, storage, prefix: '/v1/uploads' });
+  await app.register(workflowRoutes, { ...deps, storage, prefix: '/v1/workflows' });
 
   // Retry tick, called by infra/cron-worker. Phase 5 adds the outbox retry logic.
   app.post(

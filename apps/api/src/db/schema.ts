@@ -2,8 +2,11 @@ import { sql } from 'drizzle-orm';
 import {
   boolean,
   check,
+  date,
   index,
   integer,
+  jsonb,
+  numeric,
   pgEnum,
   pgTable,
   text,
@@ -11,7 +14,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { PERMISSIONS } from '@docflow/shared';
+import { PERMISSIONS, STEP_STATUSES, WORKFLOW_STATUSES } from '@docflow/shared';
 
 const id = () =>
   uuid('id')
@@ -142,4 +145,119 @@ export const companyDefaultApprovers = pgTable(
     index('company_default_approvers_employee_idx').on(t.employeeId),
     check('company_default_approvers_position_positive', sql`${t.position} > 0`),
   ],
+);
+
+// ---- Phase 3: uploads and workflows (plan.md §4.1) -------------------------
+
+export const workflowStatusEnum = pgEnum('workflow_status', WORKFLOW_STATUSES);
+export const stepStatusEnum = pgEnum('step_status', STEP_STATUSES);
+
+/** A presigned upload, before it becomes a workflow. One upload backs at most one workflow. */
+export const uploads = pgTable(
+  'uploads',
+  {
+    id: uuid('id').primaryKey(),
+    objectKey: text('object_key').notNull(),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => employees.id),
+    fileName: text('file_name').notNull(),
+    fileMime: text('file_mime').notNull(),
+    fileSize: integer('file_size').notNull(),
+    createdAt: createdAt(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('uploads_object_key_unique').on(t.objectKey),
+    index('uploads_created_by_idx').on(t.createdBy),
+  ],
+);
+
+export const workflows = pgTable(
+  'workflows',
+  {
+    id: id(),
+    uploadId: uuid('upload_id')
+      .notNull()
+      .references(() => uploads.id),
+    title: text('title').notNull(),
+    fileKey: text('file_key').notNull(),
+    fileName: text('file_name').notNull(),
+    fileMime: text('file_mime').notNull(),
+    fileSize: integer('file_size').notNull(),
+    fileSha256: text('file_sha256').notNull(),
+    companyId: uuid('company_id')
+      .notNull()
+      .references(() => companies.id),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => employees.id),
+    status: workflowStatusEnum('status').notNull(),
+    currentPosition: integer('current_position').notNull(),
+    chainCustomised: boolean('chain_customised').notNull(),
+    submittedAt: timestamp('submitted_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: updatedAt(),
+    version: integer('version').notNull().default(1),
+    // Invoice fields (decisions.md D6), all optional
+    invoiceNumber: text('invoice_number'),
+    vendorName: text('vendor_name'),
+    invoiceDate: date('invoice_date', { mode: 'string' }),
+    amount: numeric('amount', { precision: 14, scale: 2 }),
+    currency: text('currency').notNull().default('INR'),
+    notes: text('notes'),
+  },
+  (t) => [
+    uniqueIndex('workflows_upload_unique').on(t.uploadId),
+    index('workflows_created_by_idx').on(t.createdBy, t.submittedAt),
+    index('workflows_company_idx').on(t.companyId),
+    index('workflows_status_idx').on(t.status),
+  ],
+);
+
+/**
+ * The chain snapshot (invariant 2): names and emails are copied at submit so history stays
+ * readable after master edits. A repeated position is a parallel group (D1); the CFO row is
+ * always the highest position and alone.
+ */
+export const workflowSteps = pgTable(
+  'workflow_steps',
+  {
+    id: id(),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => workflows.id),
+    position: integer('position').notNull(),
+    employeeId: uuid('employee_id')
+      .notNull()
+      .references(() => employees.id),
+    employeeName: text('employee_name').notNull(),
+    employeeEmail: text('employee_email').notNull(),
+    isCfo: boolean('is_cfo').notNull().default(false),
+    status: stepStatusEnum('status').notNull(),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    remarks: text('remarks'),
+  },
+  (t) => [
+    uniqueIndex('workflow_steps_unique').on(t.workflowId, t.employeeId),
+    index('workflow_steps_workflow_position_idx').on(t.workflowId, t.position),
+    index('workflow_steps_employee_status_idx').on(t.employeeId, t.status),
+    check('workflow_steps_position_positive', sql`${t.position} > 0`),
+  ],
+);
+
+/** Append-only (invariant 7): a trigger rejects UPDATE and DELETE (see migration). */
+export const auditEvents = pgTable(
+  'audit_events',
+  {
+    id: id(),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => workflows.id),
+    actorId: uuid('actor_id').references(() => employees.id),
+    eventType: text('event_type').notNull(),
+    payload: jsonb('payload').notNull().default({}),
+    createdAt: createdAt(),
+  },
+  (t) => [index('audit_events_workflow_idx').on(t.workflowId, t.createdAt)],
 );

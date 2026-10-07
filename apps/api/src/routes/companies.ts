@@ -1,47 +1,13 @@
-import {
-  Company,
-  CompanyUpsert,
-  IdParam,
-  ListQuery,
-  normalizePositions,
-  paginated,
-  validateChain,
-  type CompanyApprover,
-} from '@docflow/shared';
-import { and, asc, count, eq, inArray, or, sql } from 'drizzle-orm';
+import { Company, CompanyUpsert, IdParam, ListQuery, paginated } from '@docflow/shared';
+import { and, asc, count, eq, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
-import type { z } from 'zod';
 import type { DbOrTx } from '../db/client.js';
-import { companies, companyDefaultApprovers, employees, roles } from '../db/schema.js';
-import { AppError, conflict, isUniqueViolation, notFound } from '../errors.js';
+import { companies, companyDefaultApprovers } from '../db/schema.js';
+import { checkChain, defaultApproversFor } from '../domain/chain.js';
+import { conflict, isUniqueViolation, notFound } from '../errors.js';
 import { currentUser, requirePermission } from '../plugins/auth.js';
 import type { RouteDeps } from './deps.js';
 import { containsPattern, pageOffset, statusCondition } from './query-helpers.js';
-
-type CompanyInput = z.output<typeof CompanyUpsert>;
-
-async function approversFor(db: DbOrTx, companyIds: string[]) {
-  const byCompany = new Map<string, CompanyApprover[]>();
-  if (companyIds.length === 0) return byCompany;
-  const rows = await db
-    .select({
-      companyId: companyDefaultApprovers.companyId,
-      employeeId: companyDefaultApprovers.employeeId,
-      position: companyDefaultApprovers.position,
-      name: employees.name,
-      isActive: employees.isActive,
-    })
-    .from(companyDefaultApprovers)
-    .innerJoin(employees, eq(employees.id, companyDefaultApprovers.employeeId))
-    .where(inArray(companyDefaultApprovers.companyId, companyIds))
-    .orderBy(asc(companyDefaultApprovers.position), asc(employees.name));
-  for (const { companyId, ...approver } of rows) {
-    const list = byCompany.get(companyId) ?? [];
-    list.push(approver);
-    byCompany.set(companyId, list);
-  }
-  return byCompany;
-}
 
 const companyColumns = {
   id: companies.id,
@@ -53,39 +19,7 @@ const companyColumns = {
 async function getCompany(db: DbOrTx, id: string) {
   const [row] = await db.select(companyColumns).from(companies).where(eq(companies.id, id));
   if (!row) throw notFound('Company');
-  return { ...row, approvers: (await approversFor(db, [id])).get(id) ?? [] };
-}
-
-/** Structural rules (shared with the web form) plus eligibility: every approver must be an active APPROVER (D3). */
-async function checkChain(db: DbOrTx, input: CompanyInput) {
-  const errors = validateChain(input.approvers);
-  if (errors.length > 0) {
-    throw new AppError(400, 'INVALID_CHAIN', 'The approval chain is not valid', { errors });
-  }
-  const ids = input.approvers.map((a) => a.employeeId);
-  const eligible = await db
-    .select({ id: employees.id })
-    .from(employees)
-    .innerJoin(roles, eq(roles.id, employees.roleId))
-    .where(
-      and(
-        inArray(employees.id, ids),
-        eq(employees.isActive, true),
-        eq(roles.isActive, true),
-        eq(roles.permission, 'APPROVER'),
-      ),
-    );
-  const eligibleIds = new Set(eligible.map((e) => e.id));
-  const ineligible = ids.filter((id) => !eligibleIds.has(id));
-  if (ineligible.length > 0) {
-    throw new AppError(
-      400,
-      'INELIGIBLE_APPROVER',
-      'Only active employees with an Approver role can be in an approval chain',
-      { employeeIds: ineligible },
-    );
-  }
-  return normalizePositions(input.approvers);
+  return { ...row, approvers: (await defaultApproversFor(db, [id])).get(id) ?? [] };
 }
 
 async function translateUniqueErrors<T>(run: () => Promise<T>): Promise<T> {
@@ -130,7 +64,7 @@ export const companyRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db 
           .offset(pageOffset(query)),
         db.select({ total: count() }).from(companies).where(where),
       ]);
-      const approvers = await approversFor(
+      const approvers = await defaultApproversFor(
         db,
         rows.map((r) => r.id),
       );
@@ -152,7 +86,10 @@ export const companyRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db 
     { schema: { body: CompanyUpsert, response: { 201: Company } } },
     async (request, reply) => {
       const body = request.body;
-      const chain = await checkChain(db, body);
+      const chain = (await checkChain(db, body.approvers)).map(({ employeeId, position }) => ({
+        employeeId,
+        position,
+      }));
       const id = await translateUniqueErrors(() =>
         db.transaction(async (tx) => {
           const [created] = await tx
@@ -176,7 +113,10 @@ export const companyRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db 
     async (request) => {
       const { params, body } = request;
       await getCompany(db, params.id);
-      const chain = await checkChain(db, body);
+      const chain = (await checkChain(db, body.approvers)).map(({ employeeId, position }) => ({
+        employeeId,
+        position,
+      }));
       await translateUniqueErrors(() =>
         db.transaction(async (tx) => {
           await tx

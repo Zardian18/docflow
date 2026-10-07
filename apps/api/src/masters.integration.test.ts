@@ -21,7 +21,6 @@ const ADMIN_ENDPOINTS: Array<[method: 'GET' | 'POST' | 'PUT', url: string]> = [
   ['GET', '/v1/employees'],
   ['POST', '/v1/employees'],
   ['PUT', `/v1/employees/${ZERO_ID}`],
-  ['GET', '/v1/employees/approver-search?q=a'],
   ['GET', '/v1/employees/cfo'],
   ['POST', `/v1/employees/${ZERO_ID}/password-link`],
   ['GET', '/v1/companies'],
