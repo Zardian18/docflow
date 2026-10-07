@@ -7,6 +7,8 @@ import { hashPassword } from './auth/crypto.js';
 import { createDb, type Db } from './db/client.js';
 import { runMigrations } from './db/migrations.js';
 import { employees, roles } from './db/schema.js';
+import { MemoryStorage } from './storage/memory.js';
+import type { StorageService } from './storage/storage.js';
 import { testEnv } from './test-helpers.js';
 
 export const TEST_DB_URL = process.env.TEST_DATABASE_URL;
@@ -64,11 +66,16 @@ export async function createEmployee(
   return row!.id;
 }
 
-export async function testApp(db: Db, overrides: Parameters<typeof testEnv>[0] = {}) {
+export async function testApp(
+  db: Db,
+  overrides: Parameters<typeof testEnv>[0] = {},
+  storage: StorageService = new MemoryStorage(),
+) {
   return buildApp({
     env: testEnv({ DATABASE_URL: TEST_DB_URL ?? '', ...overrides }),
     db,
     limits: { authAttemptsPerMinute: 1000 },
+    storage,
   });
 }
 

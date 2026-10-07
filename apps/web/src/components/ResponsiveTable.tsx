@@ -81,10 +81,13 @@ export function ResponsiveTable<T>({
           {rows!.map((row) => (
             <li key={rowKey(row)} className="flex flex-col gap-3 px-4 py-4">
               {primary && <div className="font-medium break-words">{primary.cell(row)}</div>}
-              <dl className="grid grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
+              {/* Label beside value from 420px; on the narrowest phones the label sits above it */}
+              <dl className="flex flex-col gap-2.5 text-sm min-[420px]:grid min-[420px]:grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)] min-[420px]:gap-x-3 min-[420px]:gap-y-2">
                 {details.map((c) => (
-                  <div key={c.key} className="contents">
-                    <dt className="text-muted-foreground">{c.header}</dt>
+                  <div key={c.key} className="flex flex-col gap-0.5 min-[420px]:contents">
+                    <dt className="text-muted-foreground text-xs min-[420px]:text-sm">
+                      {c.header}
+                    </dt>
                     <dd className="min-w-0 break-words">{c.cell(row)}</dd>
                   </div>
                 ))}

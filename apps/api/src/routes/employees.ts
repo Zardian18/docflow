@@ -1,6 +1,4 @@
 import {
-  ApproverOption,
-  ApproverSearchQuery,
   CfoInfo,
   Employee,
   EmployeeCreate,
@@ -20,7 +18,7 @@ import { companies, companyDefaultApprovers, employees, roles } from '../db/sche
 import { AppError, conflict, isUniqueViolation, notFound } from '../errors.js';
 import { currentUser, requirePermission } from '../plugins/auth.js';
 import type { RouteDeps } from './deps.js';
-import { containsPattern, pageOffset, prefixPattern, statusCondition } from './query-helpers.js';
+import { containsPattern, pageOffset, statusCondition } from './query-helpers.js';
 
 const employeeColumns = {
   id: employees.id,
@@ -136,33 +134,6 @@ export const employeeRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db
       ]);
       return { items, total: totals?.total ?? 0, page: query.page, pageSize: query.pageSize };
     },
-  );
-
-  // Approver picker: only active employees whose (active) role is APPROVER (D3, invariant 11).
-  // Matches the start of the name, case-insensitively (URS §5.2).
-  app.get(
-    '/approver-search',
-    { schema: { querystring: ApproverSearchQuery, response: { 200: ApproverOption.array() } } },
-    async ({ query }) =>
-      db
-        .select({
-          id: employees.id,
-          name: employees.name,
-          email: employees.email,
-          roleName: roles.name,
-        })
-        .from(employees)
-        .innerJoin(roles, eq(roles.id, employees.roleId))
-        .where(
-          and(
-            eq(employees.isActive, true),
-            eq(roles.isActive, true),
-            eq(roles.permission, 'APPROVER'),
-            query.q ? sql`lower(${employees.name}) like ${prefixPattern(query.q)}` : undefined,
-          ),
-        )
-        .orderBy(asc(sql`lower(${employees.name})`))
-        .limit(10),
   );
 
   app.get('/cfo', { schema: { response: { 200: CfoInfo } } }, async () => {

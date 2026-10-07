@@ -7,3 +7,5 @@ allowBuilds:
   workerd: true
 minimumReleaseAgeExclude:
   - pino-pretty@13.2.0
+  - '@aws-sdk/client-s3@3.1147.0'
+  - '@aws-sdk/s3-request-presigner@3.1147.0'

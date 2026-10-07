@@ -27,6 +27,11 @@ describe('loadEnv', () => {
     expect(loadEnv({ ...valid, DATABASE_URL_DIRECT: '', PORT: '' }).PORT).toBe(3000);
   });
 
+  it('requires the B2 settings in production only', () => {
+    expect(() => loadEnv({ ...valid, NODE_ENV: 'production' })).toThrow(/B2_BUCKET/);
+    expect(loadEnv({ ...valid, NODE_ENV: 'development' }).B2_BUCKET).toBeUndefined();
+  });
+
   it('rejects a short tick secret', () => {
     expect(() => loadEnv({ ...valid, TICK_SHARED_SECRET: 'short' })).toThrow(/at least 32/);
   });

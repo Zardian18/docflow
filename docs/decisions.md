@@ -161,3 +161,17 @@ So "as many as possible for free" resolves to **file storage as the real ceiling
 - **CSRF protection:** while the cookie is `SameSite=None`, every state-changing request must come from `WEB_ORIGIN` and be JSON. Otherwise it gets a 403.
 - **Step numbers:** they are renumbered 1..n on save (1,1,3 becomes 1,1,2). Gaps carry no meaning.
 - **Masters audit:** master-data changes are recorded in the server logs (actor and record IDs, no personal data) but not in `audit_events`, which stays workflow-scoped as in plan §4.1.
+
+---
+
+### Phase 3 decisions (owner, 7 Oct 2026)
+- **D6 confirmed:** the invoice fields are invoice number, vendor name, invoice date, amount (numeric 14,2), currency (default `INR`) and notes, all optional. The owner may adjust the list later; adding a field is a migration plus one form field.
+- **D20 (file rules):** PDF or DOCX, up to 10 MB. The rule is enforced in three places:
+  - **The browser** checks first.
+  - **The API** validates the declared type and size.
+  - **The storage service** only accepts a PUT that matches the signed type and exact size. This was verified against B2.
+  - **After upload**, the API also checks the file's real signature (`%PDF-` or zip), and deletes and rejects mismatches.
+- **D3(d) minimum (confirmed):** a Creator may add, remove, reorder or make parallel steps for one document, but the submitted chain must keep **at least 2 approvers before the CFO**.
+- **Document name:** the document is identified by its uploaded file name. There is no separate title field.
+- **Known limitation:** files are not malware-scanned. Only the size, type and signature checks above are applied (plan §8). Raise this with the client.
+- **Storage hygiene:** a file that is uploaded but never submitted stays in the bucket. Cleaning up abandoned uploads is a candidate job for the retry tick later. Uploads expire after 24 h for submission purposes.
