@@ -397,10 +397,17 @@ describe.skipIf(!TEST_DB_URL)('creator submission', () => {
       }
     });
 
-    it('approvers and the CFO cannot see it yet (their access arrives with Phase 4)', async () => {
-      const approver = await new Client(app).login('a@t.co');
-      expect((await approver.get(`/v1/workflows/${workflowId}`)).statusCode).toBe(403);
-      expect((await approver.get('/v1/workflows/mine')).statusCode).toBe(403);
+    it('an approver sees it once their step is reached, and not before (invariant 1)', async () => {
+      const first = await new Client(app).login('a@t.co');
+      const second = await new Client(app).login('b@t.co');
+      const cfo = await new Client(app).login('cfo@t.co');
+      expect((await first.get(`/v1/workflows/${workflowId}`)).statusCode).toBe(200);
+      expect((await first.get(`/v1/workflows/${workflowId}/file`)).statusCode).toBe(200);
+      for (const notYet of [second, cfo]) {
+        expect((await notYet.get(`/v1/workflows/${workflowId}`)).statusCode).toBe(404);
+        expect((await notYet.get(`/v1/workflows/${workflowId}/file`)).statusCode).toBe(404);
+      }
+      expect((await first.get('/v1/workflows/mine')).statusCode).toBe(403);
     });
 
     it('audit events cannot be edited or deleted (invariant 7)', async () => {

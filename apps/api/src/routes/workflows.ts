@@ -1,20 +1,26 @@
 import {
+  DecisionRequest,
+  DecisionResult,
   FileLink,
   IdParam,
   paginated,
+  ReassignRequest,
   WorkflowCreate,
   WorkflowDetail,
   WorkflowSummary,
 } from '@docflow/shared';
-import { asc, count, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import type { AuthUser } from '../auth/sessions.js';
 import type { Db } from '../db/client.js';
 import { auditEvents, companies, employees, workflowSteps, workflows } from '../db/schema.js';
+import { decide } from '../domain/decide.js';
+import { reassignStep } from '../domain/reassign.js';
 import { submitWorkflow } from '../domain/submit.js';
 import { notFound } from '../errors.js';
+import { deliver, type EmailProvider } from '../notify/outbox.js';
 import { currentUser, requirePermission } from '../plugins/auth.js';
-import type { AuthUser } from '../auth/sessions.js';
 import type { StorageService } from '../storage/storage.js';
 import type { RouteDeps } from './deps.js';
 
@@ -41,14 +47,16 @@ const summaryColumns = {
 const iso = (d: Date) => d.toISOString();
 
 /**
- * Who may see a workflow (plan.md §4.2). Phase 3: its Creator and Admin. Phase 4 adds
- * approvers/CFO once their step is reached. Anyone else gets 404, not 403, so ids don't leak.
+ * Who may see a workflow (plan.md §4.2, invariant 1): its Creator; Admin (read-only); and an
+ * approver or the CFO only once their step has been reached, or after they decided. Anyone
+ * else gets 404, not 403, so document ids reveal nothing.
  */
 async function visibleWorkflow(db: Db, user: AuthUser, id: string) {
   const [row] = await db
     .select({
       id: workflows.id,
       createdBy: workflows.createdBy,
+      currentPosition: workflows.currentPosition,
       fileKey: workflows.fileKey,
       fileName: workflows.fileName,
     })
@@ -56,17 +64,26 @@ async function visibleWorkflow(db: Db, user: AuthUser, id: string) {
     .where(eq(workflows.id, id));
   if (!row) throw notFound('Document');
   if (user.permission === 'ADMIN' || row.createdBy === user.id) return row;
+  if (user.permission === 'APPROVER' || user.permission === 'CFO') {
+    const [step] = await db
+      .select({ position: workflowSteps.position, decidedAt: workflowSteps.decidedAt })
+      .from(workflowSteps)
+      .where(and(eq(workflowSteps.workflowId, id), eq(workflowSteps.employeeId, user.id)));
+    if (step && (step.position <= row.currentPosition || step.decidedAt)) return row;
+  }
   throw notFound('Document');
 }
 
-const ListMineQuery = z.object({
+const PageQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });
 
+const StepParams = z.object({ id: z.uuid(), stepId: z.uuid() });
+
 export const workflowRoutes: FastifyPluginAsyncZod<
-  RouteDeps & { storage: StorageService }
-> = async (app, { db, storage }) => {
+  RouteDeps & { storage: StorageService; email: EmailProvider | null }
+> = async (app, { db, storage, email }) => {
   app.post(
     '/',
     {
@@ -75,8 +92,9 @@ export const workflowRoutes: FastifyPluginAsyncZod<
     },
     async (request, reply) => {
       const user = currentUser(request);
-      const id = await submitWorkflow(db, storage, user.id, request.body);
+      const { id, outboxIds } = await submitWorkflow(db, storage, user.id, request.body);
       request.log.info({ workflowId: id, actorId: user.id }, 'workflow submitted');
+      await deliver(db, email, outboxIds, request.log);
       return reply.code(201).send({ id });
     },
   );
@@ -85,7 +103,7 @@ export const workflowRoutes: FastifyPluginAsyncZod<
     '/mine',
     {
       onRequest: requirePermission('CREATOR'),
-      schema: { querystring: ListMineQuery, response: { 200: paginated(WorkflowSummary) } },
+      schema: { querystring: PageQuery, response: { 200: paginated(WorkflowSummary) } },
     },
     async (request) => {
       const user = currentUser(request);
@@ -117,13 +135,11 @@ export const workflowRoutes: FastifyPluginAsyncZod<
 
   app.get(
     '/:id',
-    {
-      onRequest: requirePermission('CREATOR', 'ADMIN'),
-      schema: { params: IdParam, response: { 200: WorkflowDetail } },
-    },
+    { schema: { params: IdParam, response: { 200: WorkflowDetail } } },
     async (request) => {
-      await visibleWorkflow(db, currentUser(request), request.params.id);
+      const user = currentUser(request);
       const id = request.params.id;
+      await visibleWorkflow(db, user, id);
       const [w] = await db
         .select({
           ...summaryColumns,
@@ -153,6 +169,7 @@ export const workflowRoutes: FastifyPluginAsyncZod<
             name: workflowSteps.employeeName,
             isCfo: workflowSteps.isCfo,
             status: workflowSteps.status,
+            activatedAt: workflowSteps.activatedAt,
             decidedAt: workflowSteps.decidedAt,
             remarks: workflowSteps.remarks,
           })
@@ -171,11 +188,27 @@ export const workflowRoutes: FastifyPluginAsyncZod<
           .where(eq(auditEvents.workflowId, id))
           .orderBy(asc(auditEvents.createdAt)),
       ]);
+      const open = w!.status === 'PENDING_APPROVER' || w!.status === 'PENDING_CFO';
+      const mine = steps.find((s) => s.employeeId === user.id);
       return {
         ...w!,
         submittedAt: iso(w!.submittedAt),
         updatedAt: iso(w!.updatedAt),
-        steps: steps.map((s) => ({ ...s, decidedAt: s.decidedAt ? iso(s.decidedAt) : null })),
+        totalPositions: new Set(steps.filter((s) => !s.isCfo).map((s) => s.position)).size,
+        myStep: mine
+          ? {
+              stepId: mine.id,
+              position: mine.position,
+              isCfo: mine.isCfo,
+              status: mine.status,
+              canAct: open && mine.status === 'PENDING' && mine.position === w!.currentPosition,
+            }
+          : null,
+        steps: steps.map((s) => ({
+          ...s,
+          activatedAt: s.activatedAt ? iso(s.activatedAt) : null,
+          decidedAt: s.decidedAt ? iso(s.decidedAt) : null,
+        })),
         events: events.map((e) => ({ ...e, createdAt: iso(e.createdAt) })),
       };
     },
@@ -184,10 +217,7 @@ export const workflowRoutes: FastifyPluginAsyncZod<
   // A short-lived download link, issued only after the visibility check (plan.md §4.2)
   app.get(
     '/:id/file',
-    {
-      onRequest: requirePermission('CREATOR', 'ADMIN'),
-      schema: { params: IdParam, response: { 200: FileLink } },
-    },
+    { schema: { params: IdParam, response: { 200: FileLink } } },
     async (request) => {
       const w = await visibleWorkflow(db, currentUser(request), request.params.id);
       const link = await storage.presignGet(w.fileKey, {
@@ -195,6 +225,61 @@ export const workflowRoutes: FastifyPluginAsyncZod<
         expiresInSeconds: FILE_LINK_SECONDS,
       });
       return { url: link.url, expiresAt: iso(link.expiresAt) };
+    },
+  );
+
+  // Approve or reject (plan.md §4.8). Emails are attempted right after the commit, in this
+  // same request (invariant 10); the cron tick only retries failures.
+  app.post(
+    '/:id/decision',
+    {
+      onRequest: requirePermission('APPROVER', 'CFO'),
+      schema: { params: IdParam, body: DecisionRequest, response: { 200: DecisionResult } },
+    },
+    async (request) => {
+      const user = currentUser(request);
+      const result = await decide(
+        db,
+        { id: user.id, name: user.name },
+        request.params.id,
+        request.body,
+      );
+      request.log.info(
+        {
+          workflowId: request.params.id,
+          actorId: user.id,
+          decision: request.body.decision,
+          status: result.status,
+        },
+        'decision recorded',
+      );
+      await deliver(db, email, result.outboxIds, request.log);
+      return { status: result.status, currentPosition: result.currentPosition };
+    },
+  );
+
+  // Admin hands an undecided step to someone else (D9). The button arrives with Phase 6.
+  app.post(
+    '/:id/steps/:stepId/reassign',
+    {
+      onRequest: requirePermission('ADMIN'),
+      schema: { params: StepParams, body: ReassignRequest },
+    },
+    async (request, reply) => {
+      const user = currentUser(request);
+      const outboxIds = await reassignStep(
+        db,
+        user.id,
+        request.params.id,
+        request.params.stepId,
+        request.body,
+      );
+      request.log.info(
+        { workflowId: request.params.id, stepId: request.params.stepId, actorId: user.id },
+        'step reassigned',
+      );
+      await deliver(db, email, outboxIds, request.log);
+      return reply.code(204).send();
     },
   );
 };

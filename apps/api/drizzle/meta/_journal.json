@@ -36,6 +36,20 @@
       "when": 1791359700251,
       "tag": "0004_audit_events_append_only",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791366900331,
+      "tag": "0005_approvals_outbox",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791367221094,
+      "tag": "0006_audit_event_clock_timestamp",
+      "breakpoints": true
     }
   ]
 }

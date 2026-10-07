@@ -137,6 +137,8 @@ export const WorkflowStep = z.object({
   name: z.string(),
   isCfo: z.boolean(),
   status: StepStatus,
+  /** When this step became pending. */
+  activatedAt: z.iso.datetime({ offset: true }).nullable(),
   decidedAt: z.iso.datetime({ offset: true }).nullable(),
   remarks: z.string().nullable(),
 });
@@ -163,7 +165,20 @@ export const AuditEvent = z.object({
 });
 export type AuditEvent = z.infer<typeof AuditEvent>;
 
+/** The caller's own step in this document, if they are in its chain. */
+export const MyStep = z.object({
+  stepId: z.uuid(),
+  position: z.number().int().positive(),
+  isCfo: z.boolean(),
+  status: StepStatus,
+  /** True only while it is this person's turn and the document is still open. */
+  canAct: z.boolean(),
+});
+export type MyStep = z.infer<typeof MyStep>;
+
 export const WorkflowDetail = WorkflowSummary.extend({
+  totalPositions: z.number().int().positive(),
+  myStep: MyStep.nullable(),
   companyId: z.uuid(),
   companyCode: z.string().nullable(),
   createdByName: z.string(),

@@ -4,11 +4,14 @@ import {
   CfoInfo,
   Company,
   CompanyOption,
+  DecisionHistoryItem,
+  DecisionResult,
   FileLink,
   Employee,
   Me,
   paginated,
   PasswordLink,
+  PendingApprovalsResponse,
   PingResponse,
   PresignResponse,
   Role,
@@ -16,6 +19,7 @@ import {
   WorkflowSummary,
   type ChangePasswordRequest,
   type CompanyUpsert,
+  type DecisionRequest,
   type EmployeeCreate,
   type EmployeeUpdate,
   type ListQuery,
@@ -192,6 +196,17 @@ export const api = {
       get(paginated(WorkflowSummary), `/v1/workflows/mine?${listParams(query)}`, signal),
     get: (id: string, signal?: AbortSignal) => get(WorkflowDetail, `/v1/workflows/${id}`, signal),
     fileLink: (id: string) => get(FileLink, `/v1/workflows/${id}/file`),
+    decide: (id: string, body: DecisionRequest) =>
+      request(`/v1/workflows/${id}/decision`, { method: 'POST', body }).then((d) =>
+        DecisionResult.parse(d),
+      ),
+  },
+
+  approvals: {
+    pending: (signal?: AbortSignal) =>
+      get(PendingApprovalsResponse, '/v1/approvals/pending', signal),
+    history: (query: { page?: number; pageSize?: number }, signal?: AbortSignal) =>
+      get(paginated(DecisionHistoryItem), `/v1/approvals/history?${listParams(query)}`, signal),
   },
 };
 
