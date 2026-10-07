@@ -32,7 +32,10 @@ export const FileName = z
   .min(1)
   .max(200, 'File name is too long')
   // No path separators or control characters
-  .refine((n) => !/[\\/\u0000-\u001f]/.test(n), 'File name contains invalid characters');
+  .refine(
+    (n) => ![...n].some((ch) => ch === '/' || ch === '\\' || ch.charCodeAt(0) < 0x20),
+    'File name contains invalid characters',
+  );
 
 export const PresignRequest = z
   .object({
