@@ -137,6 +137,8 @@ export const WorkflowStep = z.object({
   name: z.string(),
   isCfo: z.boolean(),
   status: StepStatus,
+  /** When this step became pending. */
+  activatedAt: z.iso.datetime({ offset: true }).nullable(),
   decidedAt: z.iso.datetime({ offset: true }).nullable(),
   remarks: z.string().nullable(),
 });

@@ -54,7 +54,7 @@ export const PendingApproval = z.object({
   totalPositions: z.number().int().positive(),
   isCfo: z.boolean(),
   waitingSince: z.iso.datetime({ offset: true }),
-  /** Approvers who have already approved, in step order (shown on the CFO dashboard). */
+  /** Steps already approved, in order; a parallel step is one entry (“A & B”). Shown on the CFO dashboard. */
   clearedBy: z.array(z.string()),
 });
 export type PendingApproval = z.infer<typeof PendingApproval>;

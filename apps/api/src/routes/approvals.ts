@@ -37,9 +37,13 @@ export const approvalRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db
              coalesce(s.activated_at, w.submitted_at) as waiting_since,
              (select count(distinct x.position)::int from workflow_steps x
                where x.workflow_id = w.id and not x.is_cfo) as total_positions,
-             (select array_agg(x.employee_name order by x.position, x.employee_name)
-                from workflow_steps x
-               where x.workflow_id = w.id and x.status = 'APPROVED') as cleared_by
+             -- One entry per step, parallel approvers joined: ['A. Nair & R. Shah', 'P. Kulkarni']
+             (select array_agg(g.names order by g.position)
+                from (select x.position,
+                             string_agg(x.employee_name, ' & ' order by x.employee_name) as names
+                        from workflow_steps x
+                       where x.workflow_id = w.id and x.status = 'APPROVED'
+                       group by x.position) g) as cleared_by
         from workflow_steps s
         join workflows w on w.id = s.workflow_id
         join companies c on c.id = w.company_id

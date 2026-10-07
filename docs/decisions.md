@@ -184,3 +184,12 @@ So "as many as possible for free" resolves to **file storage as the real ceiling
   - **Role:** custom, and held by nobody, active or inactive.
 - **Anything with history** can still only be deactivated. The URS §6 rule and invariant 7 hold for every record that appears in an audit trail.
 - **Test-data wipe:** a full wipe of test data (documents, their history and files, keeping the Admin and built-in roles) is a one-off operation. Claude runs it only on the owner's explicit request, before go-live. It is never an in-app feature.
+
+### Phase 4 decisions (owner, 7 Oct 2026)
+- **Confirm before deciding:** Approve and Reject each ask for confirmation in a dialog that repeats the remarks, because decisions are final.
+- **D9 reassign:** the Admin "reassign pending step" API ships with Phase 4 and is fully tested and audited (`REASSIGNED` event with the old and new person and the reason). The Admin button arrives with the Phase 6 dashboard. Rules:
+  - only an undecided step can move;
+  - only to an active Approver who isn't already in the chain;
+  - a CFO step only to the current active CFO.
+- **Notifications before Phase 5:** every event writes its outbox rows (recipients per §4.6 / D2), but with no email provider configured the rows are marked `skipped`. Turning email on in Phase 5 does not flush a backlog of stale messages for old events. Logs record outbox ids and templates, never addresses.
+- **Status label:** while a parallel step is partly approved, the document still shows "Pending Approver (Position N)" until everyone in that step has approved (owner's wording rule).

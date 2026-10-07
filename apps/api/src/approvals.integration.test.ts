@@ -414,7 +414,7 @@ describe.skipIf(!TEST_DB_URL)('approval engine (plan.md §4.8)', () => {
       await decide('b', wf, 'APPROVE');
       await decide('c', wf, 'APPROVE');
       const pending = (await clients.cfo!.get('/v1/approvals/pending')).json();
-      expect(pending.items[0]).toMatchObject({ isCfo: true, clearedBy: ['Ann', 'Bob', 'Cy'] });
+      expect(pending.items[0]).toMatchObject({ isCfo: true, clearedBy: ['Ann & Bob', 'Cy'] });
       expect(pending.stats.period).toBe('month');
     });
 

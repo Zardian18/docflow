@@ -17,6 +17,9 @@ import { MySubmissionsPage } from '@/pages/creator/MySubmissionsPage';
 import { NewSubmissionPage } from '@/pages/creator/NewSubmissionPage';
 import { SubmissionDetailPage } from '@/pages/creator/SubmissionDetailPage';
 import { PlaceholderPage } from '@/pages/PlaceholderPage';
+import { HistoryPage } from '@/pages/reviewer/HistoryPage';
+import { PendingPage } from '@/pages/reviewer/PendingPage';
+import { ReviewPage } from '@/pages/reviewer/ReviewPage';
 
 function Allow({ permissions }: { permissions: Permission[] }) {
   return <RequireAuth allow={permissions}>{() => <Outlet />}</RequireAuth>;
@@ -97,51 +100,17 @@ export const router = createBrowserRouter([
           {
             element: <Allow permissions={['APPROVER']} />,
             children: [
-              {
-                path: '/approvals',
-                element: (
-                  <PlaceholderPage
-                    title="Pending Approvals"
-                    description="Documents waiting for your review, in the order they arrived"
-                    note="Nothing is waiting for you. You’ll get an email when a document reaches your step."
-                  />
-                ),
-              },
-              {
-                path: '/approvals/history',
-                element: (
-                  <PlaceholderPage
-                    title="History"
-                    description="Documents you have approved or rejected"
-                    note="No decisions yet."
-                  />
-                ),
-              },
+              { path: '/approvals', element: <PendingPage kind="approver" /> },
+              { path: '/approvals/history', element: <HistoryPage kind="approver" /> },
+              { path: '/approvals/:id', element: <ReviewPage kind="approver" /> },
             ],
           },
           {
             element: <Allow permissions={['CFO']} />,
             children: [
-              {
-                path: '/final-approvals',
-                element: (
-                  <PlaceholderPage
-                    title="Pending Final Approval"
-                    description="Every document that has cleared its approval chain and awaits you"
-                    note="Nothing is waiting for your final approval."
-                  />
-                ),
-              },
-              {
-                path: '/final-approvals/history',
-                element: (
-                  <PlaceholderPage
-                    title="History"
-                    description="Documents you have signed off or rejected"
-                    note="No decisions yet."
-                  />
-                ),
-              },
+              { path: '/final-approvals', element: <PendingPage kind="cfo" /> },
+              { path: '/final-approvals/history', element: <HistoryPage kind="cfo" /> },
+              { path: '/final-approvals/:id', element: <ReviewPage kind="cfo" /> },
             ],
           },
         ],

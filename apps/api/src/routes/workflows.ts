@@ -169,6 +169,7 @@ export const workflowRoutes: FastifyPluginAsyncZod<
             name: workflowSteps.employeeName,
             isCfo: workflowSteps.isCfo,
             status: workflowSteps.status,
+            activatedAt: workflowSteps.activatedAt,
             decidedAt: workflowSteps.decidedAt,
             remarks: workflowSteps.remarks,
           })
@@ -203,7 +204,11 @@ export const workflowRoutes: FastifyPluginAsyncZod<
               canAct: open && mine.status === 'PENDING' && mine.position === w!.currentPosition,
             }
           : null,
-        steps: steps.map((s) => ({ ...s, decidedAt: s.decidedAt ? iso(s.decidedAt) : null })),
+        steps: steps.map((s) => ({
+          ...s,
+          activatedAt: s.activatedAt ? iso(s.activatedAt) : null,
+          decidedAt: s.decidedAt ? iso(s.decidedAt) : null,
+        })),
         events: events.map((e) => ({ ...e, createdAt: iso(e.createdAt) })),
       };
     },
