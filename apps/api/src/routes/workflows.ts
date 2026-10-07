@@ -48,15 +48,17 @@ const summaryColumns = {
 const iso = (d: Date) => d.toISOString();
 
 /**
- * Who may see a workflow (plan.md §4.2, invariant 1): its Creator; Admin (read-only); and an
- * approver or the CFO only once their step has been reached, or after they decided. Anyone
- * else gets 404, not 403, so document ids reveal nothing.
+ * Who may see a workflow (plan.md §4.2, invariant 1): its Creator; Admin (read-only); an
+ * approver or the CFO once their step has been reached, or after they decided; and the CFO
+ * of the chain whenever the document was rejected, even before reaching them (D22: the CFO
+ * is told of every rejection). Anyone else gets 404, not 403, so document ids reveal nothing.
  */
 async function visibleWorkflow(db: Db, user: AuthUser, id: string) {
   const [row] = await db
     .select({
       id: workflows.id,
       createdBy: workflows.createdBy,
+      status: workflows.status,
       currentPosition: workflows.currentPosition,
       fileKey: workflows.fileKey,
       fileName: workflows.fileName,
@@ -68,10 +70,15 @@ async function visibleWorkflow(db: Db, user: AuthUser, id: string) {
   if (user.permission === 'ADMIN' || row.createdBy === user.id) return row;
   if (user.permission === 'APPROVER' || user.permission === 'CFO') {
     const [step] = await db
-      .select({ position: workflowSteps.position, decidedAt: workflowSteps.decidedAt })
+      .select({
+        position: workflowSteps.position,
+        decidedAt: workflowSteps.decidedAt,
+        isCfo: workflowSteps.isCfo,
+      })
       .from(workflowSteps)
       .where(and(eq(workflowSteps.workflowId, id), eq(workflowSteps.employeeId, user.id)));
     if (step && (step.position <= row.currentPosition || step.decidedAt)) return row;
+    if (step?.isCfo && row.status === 'REJECTED') return row;
   }
   throw notFound('Document');
 }

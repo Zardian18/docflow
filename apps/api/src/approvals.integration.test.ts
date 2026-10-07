@@ -424,6 +424,55 @@ describe.skipIf(!TEST_DB_URL)('approval engine (plan.md §4.8)', () => {
     });
   });
 
+  describe('the CFO sees rejections that never reached them (D22)', () => {
+    it('lists them with who rejected, where and why, and opens them read-only', async () => {
+      const wf = await submit([
+        ['a', 1],
+        ['b', 2],
+      ]);
+      await decide('a', wf, 'APPROVE');
+      await decide('b', wf, 'REJECT', 'Vendor not on the approved list');
+
+      const cfo = clients.cfo!;
+      expect((await cfo.get('/v1/approvals/pending')).json().stats.rejectedBeforeFinal).toBe(1);
+      const list = (await cfo.get('/v1/approvals/rejected-before-final')).json();
+      expect(list.total).toBe(1);
+      expect(list.items[0]).toMatchObject({
+        workflowId: wf,
+        rejectedBy: 'Bob',
+        position: 2,
+        reason: 'Vendor not on the approved list',
+      });
+
+      const detail = await cfo.get(`/v1/workflows/${wf}`);
+      expect(detail.statusCode).toBe(200);
+      expect(detail.json().myStep).toMatchObject({ isCfo: true, status: 'SKIPPED', canAct: false });
+      expect((await cfo.get(`/v1/workflows/${wf}/file`)).statusCode).toBe(200);
+      expect((await decide('cfo', wf, 'APPROVE')).statusCode).not.toBe(200);
+    });
+
+    it('does not open early rejections to other skipped approvers', async () => {
+      const wf = await submit([
+        ['a', 1],
+        ['b', 2],
+      ]);
+      await decide('a', wf, 'REJECT', 'Wrong company');
+      expect((await clients.b!.get(`/v1/workflows/${wf}`)).statusCode).toBe(404);
+    });
+
+    it('leaves out documents the CFO rejected themselves, and is CFO-only', async () => {
+      const wf = await submit([
+        ['a', 1],
+        ['b', 2],
+      ]);
+      await decide('a', wf, 'APPROVE');
+      await decide('b', wf, 'APPROVE');
+      await decide('cfo', wf, 'REJECT', 'Over budget');
+      expect((await clients.cfo!.get('/v1/approvals/rejected-before-final')).json().total).toBe(0);
+      expect((await clients.a!.get('/v1/approvals/rejected-before-final')).statusCode).toBe(403);
+    });
+  });
+
   describe('Admin reassign (D9)', () => {
     const reassign = (wf: string, stepId: string, to: string, reason = 'On leave') =>
       clients.admin!.post(`/v1/workflows/${wf}/steps/${stepId}/reassign`, {

@@ -193,7 +193,12 @@ function OutcomeCard({ workflow }: { workflow: WorkflowDetail }) {
     text = `You approved this on ${formatDateTime(mine.decidedAt)}.`;
   if (mine?.status === 'REJECTED' && mine.decidedAt)
     text = `You rejected this on ${formatDateTime(mine.decidedAt)}.`;
-  if (mine?.status === 'SKIPPED') text = 'Someone rejected this before it reached you.';
+  if (mine?.status === 'SKIPPED') {
+    const by = workflow.steps.find((s) => s.status === 'REJECTED');
+    text = by
+      ? `${by.name} rejected this at position ${by.position}${by.decidedAt ? ` on ${formatDateTime(by.decidedAt)}` : ''}, before it reached you${mine.isCfo ? ' for final approval' : ''}. No action is needed.${by.remarks ? ` Reason: “${by.remarks}”` : ''}`
+      : 'This was rejected before it reached you. No action is needed.';
+  }
   return (
     <section className="bg-card flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
       <p className="text-sm">{text}</p>
@@ -249,7 +254,12 @@ export function ReviewPage({ kind }: { kind: ReviewerKind }) {
         title="Review Document"
         description={
           <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <Link to={base} className="hover:text-foreground inline-flex items-center gap-1">
+            <Link
+              to={
+                kind === 'cfo' && w?.myStep?.status === 'SKIPPED' ? `${base}?view=rejected` : base
+              }
+              className="hover:text-foreground inline-flex items-center gap-1"
+            >
               <ChevronLeft className="size-3.5" aria-hidden />
               {REVIEWER[kind].pendingTitle}
             </Link>
