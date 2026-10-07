@@ -161,6 +161,8 @@ export const AuditEvent = z.object({
   id: z.uuid(),
   type: z.string(),
   actorName: z.string().nullable(),
+  /** One readable line, e.g. “Reassigned position 2 from A to B: on leave”. */
+  summary: z.string(),
   createdAt: z.iso.datetime({ offset: true }),
 });
 export type AuditEvent = z.infer<typeof AuditEvent>;

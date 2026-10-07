@@ -50,6 +50,13 @@
       "when": 1791367221094,
       "tag": "0006_audit_event_clock_timestamp",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791369264391,
+      "tag": "0007_dashboard_sort_index",
+      "breakpoints": true
     }
   ]
 }

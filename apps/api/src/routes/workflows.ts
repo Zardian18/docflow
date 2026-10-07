@@ -16,6 +16,7 @@ import type { AuthUser } from '../auth/sessions.js';
 import type { Db } from '../db/client.js';
 import { auditEvents, companies, employees, workflowSteps, workflows } from '../db/schema.js';
 import { decide } from '../domain/decide.js';
+import { summarizeEvent } from '../domain/events.js';
 import { reassignStep } from '../domain/reassign.js';
 import { submitWorkflow } from '../domain/submit.js';
 import { notFound } from '../errors.js';
@@ -181,6 +182,7 @@ export const workflowRoutes: FastifyPluginAsyncZod<
           .select({
             id: auditEvents.id,
             type: auditEvents.eventType,
+            payload: auditEvents.payload,
             actorName: employees.name,
             createdAt: auditEvents.createdAt,
           })
@@ -210,7 +212,11 @@ export const workflowRoutes: FastifyPluginAsyncZod<
           activatedAt: s.activatedAt ? iso(s.activatedAt) : null,
           decidedAt: s.decidedAt ? iso(s.decidedAt) : null,
         })),
-        events: events.map((e) => ({ ...e, createdAt: iso(e.createdAt) })),
+        events: events.map(({ payload, ...e }) => ({
+          ...e,
+          summary: summarizeEvent(e.type, payload),
+          createdAt: iso(e.createdAt),
+        })),
       };
     },
   );
