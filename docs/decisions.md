@@ -175,3 +175,12 @@ So "as many as possible for free" resolves to **file storage as the real ceiling
 - **Document name:** the document is identified by its uploaded file name. There is no separate title field.
 - **Known limitation:** files are not malware-scanned. Only the size, type and signature checks above are applied (plan §8). Raise this with the client.
 - **Storage hygiene:** a file that is uploaded but never submitted stays in the bucket. Cleaning up abandoned uploads is a candidate job for the retry tick later. Uploads expire after 24 h for submission purposes.
+
+### D21: Deleting records (owner, 7 Oct 2026)
+**Status: ANSWERED.** The owner wants to remove junk and test entries, not just deactivate them.
+- **Delete in the masters:** Employee, Company and Role Master have a **Delete** action, but the server only deletes records that **nothing refers to**:
+  - **Employee:** never in a submitted document's chain, never submitted one, never acted on one, not in any company's default chain, and not yourself. Their sessions, password links and never-submitted uploads (including the stored files) go with them.
+  - **Company:** no document ever submitted for it. Its default chain goes with it.
+  - **Role:** custom, and held by nobody, active or inactive.
+- **Anything with history** can still only be deactivated. The URS §6 rule and invariant 7 hold for every record that appears in an audit trail.
+- **Test-data wipe:** a full wipe of test data (documents, their history and files, keeping the Admin and built-in roles) is a one-off operation. Claude runs it only on the owner's explicit request, before go-live. It is never an in-app feature.

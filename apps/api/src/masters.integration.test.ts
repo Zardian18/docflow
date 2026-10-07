@@ -14,7 +14,7 @@ import {
 const ZERO_ID = '00000000-0000-4000-8000-000000000000';
 
 // Every Admin-only endpoint (plan.md §4.2). Each must be 401 anonymous and 403 for other permissions.
-const ADMIN_ENDPOINTS: Array<[method: 'GET' | 'POST' | 'PUT', url: string]> = [
+const ADMIN_ENDPOINTS: Array<[method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string]> = [
   ['GET', '/v1/roles'],
   ['POST', '/v1/roles'],
   ['PUT', `/v1/roles/${ZERO_ID}`],
@@ -27,6 +27,9 @@ const ADMIN_ENDPOINTS: Array<[method: 'GET' | 'POST' | 'PUT', url: string]> = [
   ['GET', `/v1/companies/${ZERO_ID}`],
   ['POST', '/v1/companies'],
   ['PUT', `/v1/companies/${ZERO_ID}`],
+  ['DELETE', `/v1/roles/${ZERO_ID}`],
+  ['DELETE', `/v1/employees/${ZERO_ID}`],
+  ['DELETE', `/v1/companies/${ZERO_ID}`],
 ];
 
 describe.skipIf(!TEST_DB_URL)('masters', () => {
@@ -91,7 +94,11 @@ describe.skipIf(!TEST_DB_URL)('masters', () => {
     it('every admin endpoint is 401 when signed out', async () => {
       const anon = new Client(app);
       for (const [method, url] of ADMIN_ENDPOINTS) {
-        const res = await anon.request(method, url, method === 'GET' ? undefined : {});
+        const res = await anon.request(
+          method,
+          url,
+          method === 'GET' || method === 'DELETE' ? undefined : {},
+        );
         expect(res.statusCode, `${method} ${url}`).toBe(401);
       }
     });
@@ -103,7 +110,11 @@ describe.skipIf(!TEST_DB_URL)('masters', () => {
         await createEmployee(db, { name: `${permission} user`, email, permission });
         const client = await new Client(app).login(email);
         for (const [method, url] of ADMIN_ENDPOINTS) {
-          const res = await client.request(method, url, method === 'GET' ? undefined : {});
+          const res = await client.request(
+            method,
+            url,
+            method === 'GET' || method === 'DELETE' ? undefined : {},
+          );
           expect(res.statusCode, `${method} ${url}`).toBe(403);
         }
       },

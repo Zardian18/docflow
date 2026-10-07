@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { z } from 'zod';
+import { DeleteButton } from '@/components/ConfirmDeleteDialog';
 import { Field, FormError } from '@/components/forms';
 import { Pagination, SearchField, StatusSelect, useListState } from '@/components/ListControls';
 import { PageBody, PageHeader } from '@/components/PageHeader';
@@ -166,6 +167,17 @@ function RoleDialog({
           )}
         </form>
         <DialogFooter>
+          {role && !role.isSystem && (
+            <DeleteButton
+              name={role.name}
+              what="role"
+              onDelete={() => api.roles.remove(role.id)}
+              onDeleted={() => {
+                queryClient.invalidateQueries({ queryKey: ['roles'] });
+                onOpenChange(false);
+              }}
+            />
+          )}
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>

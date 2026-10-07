@@ -47,8 +47,18 @@ export const setUnauthorizedHandler = (handler: () => void) => {
   onUnauthorized = handler;
 };
 
+/**
+ * Called on any 403 from a FORBIDDEN refusal. The usual cause is signing in as someone else
+ * in another tab: every tab shares one session cookie, so this tab's page no longer matches
+ * who the server sees. The handler re-checks who is signed in.
+ */
+let onForbidden: (() => void) | undefined;
+export const setForbiddenHandler = (handler: () => void) => {
+  onForbidden = handler;
+};
+
 interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PUT';
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
   signal?: AbortSignal;
   /** Don't trigger the global sign-out on 401 (login form, "who am I" probe). */
@@ -84,6 +94,7 @@ async function request(path: string, options: RequestOptions = {}): Promise<unkn
     ? new ApiError(res.status, parsed.data.error, parsed.data.message, parsed.data.details)
     : new ApiError(res.status, 'HTTP_ERROR', `The server returned an error (${res.status}).`);
   if (res.status === 401 && !quiet401) onUnauthorized?.();
+  if (res.status === 403 && error.code === 'FORBIDDEN') onForbidden?.();
   throw error;
 }
 
@@ -120,6 +131,7 @@ export const api = {
       get(paginated(Role), `/v1/roles?${listParams(query)}`, signal),
     create: (body: RoleCreate) =>
       request('/v1/roles', { method: 'POST', body }).then((d) => Role.parse(d)),
+    remove: (id: string) => request(`/v1/roles/${id}`, { method: 'DELETE' }),
     update: (id: string, body: RoleUpdate) =>
       request(`/v1/roles/${id}`, { method: 'PUT', body }).then((d) => Role.parse(d)),
   },
@@ -129,6 +141,7 @@ export const api = {
       get(paginated(Employee), `/v1/employees?${listParams(query)}`, signal),
     create: (body: EmployeeCreate) =>
       request('/v1/employees', { method: 'POST', body }).then((d) => Employee.parse(d)),
+    remove: (id: string) => request(`/v1/employees/${id}`, { method: 'DELETE' }),
     update: (id: string, body: EmployeeUpdate) =>
       request(`/v1/employees/${id}`, { method: 'PUT', body }).then((d) => Employee.parse(d)),
     passwordLink: (id: string) =>
@@ -150,6 +163,7 @@ export const api = {
     get: (id: string, signal?: AbortSignal) => get(Company, `/v1/companies/${id}`, signal),
     create: (body: CompanyUpsert) =>
       request('/v1/companies', { method: 'POST', body }).then((d) => Company.parse(d)),
+    remove: (id: string) => request(`/v1/companies/${id}`, { method: 'DELETE' }),
     update: (id: string, body: CompanyUpsert) =>
       request(`/v1/companies/${id}`, { method: 'PUT', body }).then((d) => Company.parse(d)),
   },

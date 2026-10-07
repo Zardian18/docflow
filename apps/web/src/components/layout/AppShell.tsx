@@ -1,7 +1,7 @@
 import type { Me } from '@docflow/shared';
 import { useMutation } from '@tanstack/react-query';
 import { ChevronsUpDown, KeyRound, LogOut, Menu } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { Logo } from '@/components/Logo';
@@ -122,8 +122,24 @@ function SidebarContents({ me, onNavigate }: { me: Me; onNavigate?: () => void }
  * Desktop (lg+): full-height fixed sidebar, as in the designs (where it stopped short).
  * Smaller screens: a sticky top bar whose menu button opens the same sidebar as a drawer.
  */
+/** Announces when another tab signed this browser in as someone else (tabs share one cookie). */
+function useAccountSwitchNotice(me: Me) {
+  const previous = useRef(me);
+  useEffect(() => {
+    if (previous.current.id !== me.id) {
+      toast.info(`You’re now signed in as ${me.name} (${me.roleName}) in this browser.`, {
+        description:
+          'All tabs share one sign-in. Use a private window to test another account at the same time.',
+        duration: 8000,
+      });
+    }
+    previous.current = me;
+  }, [me]);
+}
+
 export function AppShell({ me }: { me: Me }) {
   const [open, setOpen] = useState(false);
+  useAccountSwitchNotice(me);
 
   return (
     <div className="min-h-svh">

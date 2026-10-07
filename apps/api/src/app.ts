@@ -167,7 +167,7 @@ export async function buildApp({
   const deps = { db, env, limits };
   await app.register(authRoutes, { ...deps, prefix: '/v1/auth' });
   await app.register(roleRoutes, { ...deps, prefix: '/v1/roles' });
-  await app.register(employeeRoutes, { ...deps, prefix: '/v1/employees' });
+  await app.register(employeeRoutes, { ...deps, storage, prefix: '/v1/employees' });
   await app.register(lookupRoutes, deps);
   await app.register(companyRoutes, { ...deps, prefix: '/v1/companies' });
   await app.register(uploadRoutes, { ...deps, storage, prefix: '/v1/uploads' });

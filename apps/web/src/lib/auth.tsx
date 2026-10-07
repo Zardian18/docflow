@@ -20,6 +20,8 @@ export function useMe() {
       }
     },
     staleTime: 5 * 60_000,
+    // Coming back to a tab re-checks who is signed in (another tab may have switched account)
+    refetchOnWindowFocus: true,
   });
 }
 

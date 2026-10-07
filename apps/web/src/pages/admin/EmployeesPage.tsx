@@ -7,6 +7,7 @@ import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import type { z } from 'zod';
+import { DeleteButton } from '@/components/ConfirmDeleteDialog';
 import { Field, FormError } from '@/components/forms';
 import { Pagination, SearchField, StatusSelect, useListState } from '@/components/ListControls';
 import { PageBody, PageHeader } from '@/components/PageHeader';
@@ -153,7 +154,7 @@ function EmployeeDialog({
           <DialogTitle>{editing ? 'Edit employee' : 'Add employee'}</DialogTitle>
           <DialogDescription>
             {editing
-              ? 'Employees are deactivated, never deleted, so past approvals stay readable.'
+              ? 'Deactivate people who leave, so past approvals stay readable. Delete is only for entries with no history.'
               : 'They sign in with this email. After saving you’ll get a link to send them so they can set a password.'}
           </DialogDescription>
         </DialogHeader>
@@ -272,6 +273,19 @@ function EmployeeDialog({
           )}
         </form>
         <DialogFooter>
+          {employee && (
+            <DeleteButton
+              name={employee.name}
+              what="employee"
+              onDelete={() => api.employees.remove(employee.id)}
+              onDeleted={() => {
+                queryClient.invalidateQueries({ queryKey: ['employees'] });
+                queryClient.invalidateQueries({ queryKey: ['roles'] });
+                queryClient.invalidateQueries({ queryKey: ['cfo'] });
+                onOpenChange(false);
+              }}
+            />
+          )}
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
