@@ -144,7 +144,10 @@ export async function buildApp({
   await app.register(cookie);
   // Per-route limits only (auth endpoints); runs after body parsing so keys can use the email
   await app.register(rateLimit, { global: false, hook: 'preHandler' });
-  await app.register(csrfPlugin, { webOrigin: env.WEB_ORIGIN, exemptPaths: [TICK_PATH] });
+  await app.register(csrfPlugin, {
+    webOrigin: env.WEB_ORIGIN,
+    exemptPaths: [TICK_PATH, '/internal/diag-ip'],
+  });
   await app.register(authPlugin, { db });
 
   app.get(
@@ -180,6 +183,25 @@ export async function buildApp({
   await app.register(workflowRoutes, { ...deps, storage, email, prefix: '/v1/workflows' });
   await app.register(approvalRoutes, { ...deps, prefix: '/v1/approvals' });
   await app.register(adminWorkflowRoutes, { ...deps, prefix: '/v1/admin/workflows' });
+
+  // TEMPORARY (Phase 7, finding #1): shows which client-IP headers reach the app on Render,
+  // so trustProxy can be set to the real hop count. Secret-protected; removed in the next PR.
+  app.post('/internal/diag-ip', async (request, reply) => {
+    const provided = request.headers['x-tick-secret'];
+    if (
+      !secretsMatch(typeof provided === 'string' ? provided : undefined, env.TICK_SHARED_SECRET)
+    ) {
+      return reply.code(401).send({ error: 'unauthorized' });
+    }
+    const h = request.headers;
+    return {
+      xForwardedFor: h['x-forwarded-for'] ?? null,
+      cfConnectingIp: h['cf-connecting-ip'] ?? null,
+      trueClientIp: h['true-client-ip'] ?? null,
+      xRealIp: h['x-real-ip'] ?? null,
+      socket: request.socket.remoteAddress ?? null,
+    };
+  });
 
   // Retry tick, called by infra/cron-worker. Phase 5 adds the outbox retry logic.
   app.post(
