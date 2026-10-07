@@ -22,9 +22,13 @@ export class MemoryStorage implements StorageService {
     };
   }
 
-  async presignGet(key: string, opts: { fileName: string; expiresInSeconds: number }) {
+  async presignGet(
+    key: string,
+    opts: { fileName: string; expiresInSeconds: number; disposition?: 'inline' | 'attachment' },
+  ) {
+    const disposition = opts.disposition ?? 'attachment';
     return {
-      url: `https://storage.test/get/${encodeURIComponent(key)}?name=${encodeURIComponent(opts.fileName)}`,
+      url: `https://storage.test/get/${encodeURIComponent(key)}?name=${encodeURIComponent(opts.fileName)}&disposition=${disposition}`,
       expiresAt: new Date(Date.now() + opts.expiresInSeconds * 1000),
     };
   }

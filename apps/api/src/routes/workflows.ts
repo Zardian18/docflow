@@ -59,6 +59,7 @@ async function visibleWorkflow(db: Db, user: AuthUser, id: string) {
       currentPosition: workflows.currentPosition,
       fileKey: workflows.fileKey,
       fileName: workflows.fileName,
+      fileMime: workflows.fileMime,
     })
     .from(workflows)
     .where(eq(workflows.id, id));
@@ -214,15 +215,26 @@ export const workflowRoutes: FastifyPluginAsyncZod<
     },
   );
 
-  // A short-lived download link, issued only after the visibility check (plan.md §4.2)
+  // A short-lived link, issued only after the visibility check (plan.md §4.2).
+  // mode=view opens a PDF in the browser tab; anything else, or mode=download, saves it.
   app.get(
     '/:id/file',
-    { schema: { params: IdParam, response: { 200: FileLink } } },
+    {
+      schema: {
+        params: IdParam,
+        querystring: z.object({ mode: z.enum(['view', 'download']).default('download') }),
+        response: { 200: FileLink },
+      },
+    },
     async (request) => {
       const w = await visibleWorkflow(db, currentUser(request), request.params.id);
+      // Browsers can only display PDFs; a DOCX is always downloaded
+      const inline = request.query.mode === 'view' && w.fileMime === 'application/pdf';
       const link = await storage.presignGet(w.fileKey, {
         fileName: w.fileName,
         expiresInSeconds: FILE_LINK_SECONDS,
+        disposition: inline ? 'inline' : 'attachment',
+        contentType: inline ? 'application/pdf' : undefined,
       });
       return { url: link.url, expiresAt: iso(link.expiresAt) };
     },
