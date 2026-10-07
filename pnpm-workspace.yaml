@@ -9,3 +9,17 @@ minimumReleaseAgeExclude:
   - pino-pretty@13.2.0
   - '@aws-sdk/client-s3@3.1147.0'
   - '@aws-sdk/s3-request-presigner@3.1147.0'
+
+# Dev-only advisories (Phase 7 finding 12); nothing here ships in the API image or the SPA.
+overrides:
+  # GHSA-wq5f-xc86-pv6w: wrangler's local simulator pins 0.35.4; the patch release is drop-in
+  'miniflare>sharp': 0.35.5
+  # GHSA-67mh-4wv8-2f99 (dev-server CORS): drizzle-kit's TS config loader pins esbuild 0.18;
+  # it only uses transform, which is unchanged in 0.25
+  '@esbuild-kit/core-utils>esbuild': 0.25.12
+
+auditConfig:
+  ignoreGhsas:
+    # braces ReDoS-style stack exhaustion; no patched release exists. Reached only through the
+    # shadcn CLI's file globbing (dev machines, our own patterns); the app imports only its CSS.
+    - GHSA-vfj7-8cjw-p6xm

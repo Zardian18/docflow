@@ -207,3 +207,17 @@ So "as many as possible for free" resolves to **file storage as the real ceiling
 - **Visibility:** the CFO named in a document's chain can open it read-only, file included, once it is rejected, even if it never reached their step. Other skipped approvers still can't.
 - **Dashboard:** the CFO dashboard has a **"Rejected before final approval"** tab, with a count, listing who rejected each document, at which position, their reason and the date.
 - **Email:** rejection emails already go to the Creator and the CFO (D2). They are delivered once Phase 5 email is live.
+
+### Phase 7 security fixes (7 Oct 2026)
+Full findings, the permission matrix and known limitations: `docs/security.md`.
+- **Client IP:** the API trusts exactly `TRUSTED_PROXY_HOPS` proxies (default 3). Measured live on Render on 6 Oct 2026: the socket is Render's router, then a Render internal hop, then Cloudflare's edge, then the client. A client-supplied `X-Forwarded-For` entry can no longer change `request.ip`. If Render's network path ever changes, re-measure before changing the value.
+- **Login limits:** 5 per minute per IP+email, plus 20 per 15 minutes per email from any IP. Change-password: 5 per minute per user. Presign, submit and decide: 30 per minute per user.
+  - Limits live in memory, so they reset when the free instance sleeps or redeploys. This is accepted for one instance.
+- **Submitted files are locked:** on submit, the file is copied server-side to `documents/<workflowId>`, which no browser can ever get a write URL for. Size, type and SHA-256 are checked on that copy, and the upload copy is deleted. Documents submitted before this change keep their old `uploads/…` key.
+- **Cleanup:** the cron tick deletes uploads that expired unsubmitted (file first, then row) and sessions that expired or were revoked over 30 days ago.
+- **Session cookie:** renamed to `__Host-df_session`. Everyone is signed out once when this deploys. Signing in revokes the session the browser already held.
+- **Web security headers:** generated at build time into `dist/_headers`, covering CSP, frame-ancestors none, nosniff, Referrer-Policy, Permissions-Policy and HSTS. `connect-src` is derived from `VITE_API_BASE_URL` plus the B2 origin (`STORAGE_ORIGIN` build variable, optional), so moving the API to the real domain (Phase 8) needs no header edit.
+- **Supply chain:**
+  - The Docker base image is pinned by digest and CI actions by commit SHA.
+  - CI runs `pnpm audit --audit-level high`.
+  - One unpatched dev-only advisory, braces via the shadcn CLI, is ignored with its reason in `pnpm-workspace.yaml`.

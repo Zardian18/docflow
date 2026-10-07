@@ -1,6 +1,7 @@
 import { Password, PASSWORD_MIN_LENGTH } from '@docflow/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
@@ -20,8 +21,13 @@ const Schema = z
 /** Opened from the one-time link an Admin shares (D16). Works for first-time and reset links. */
 export function SetPasswordPage() {
   const [params] = useSearchParams();
-  const token = params.get('token') ?? '';
+  // Read the token once, then drop it from the address bar and history so it isn't left
+  // behind on a shared computer or sent on in a Referer (Phase 7 finding 9)
+  const [token] = useState(() => params.get('token') ?? '');
   const navigate = useNavigate();
+  useEffect(() => {
+    if (params.has('token')) navigate('/set-password', { replace: true });
+  }, [params, navigate]);
   const form = useForm({
     resolver: zodResolver(Schema),
     defaultValues: { password: '', confirm: '' },
