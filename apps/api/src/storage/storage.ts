@@ -22,9 +22,18 @@ export interface StorageService {
     key: string,
     opts: { contentType: string; size: number; expiresInSeconds: number },
   ): Promise<PresignedPut>;
+  /**
+   * `inline` asks the browser to display the file in the tab (PDFs); `attachment` to save it.
+   * `contentType` is sent back with the file so an inline PDF is recognised as one.
+   */
   presignGet(
     key: string,
-    opts: { fileName: string; expiresInSeconds: number },
+    opts: {
+      fileName: string;
+      expiresInSeconds: number;
+      disposition?: 'inline' | 'attachment';
+      contentType?: string;
+    },
   ): Promise<{ url: string; expiresAt: Date }>;
   /** null when the object does not exist. */
   head(key: string): Promise<ObjectInfo | null>;
@@ -35,7 +44,10 @@ export interface StorageService {
 }
 
 /** Content-Disposition value that is safe for any file name (RFC 6266 / 5987). */
-export function attachmentDisposition(fileName: string): string {
+export function contentDisposition(
+  fileName: string,
+  disposition: 'inline' | 'attachment' = 'attachment',
+): string {
   const ascii = fileName.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+  return `${disposition}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
 }

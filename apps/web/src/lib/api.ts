@@ -195,7 +195,9 @@ export const api = {
     mine: (query: { page?: number; pageSize?: number }, signal?: AbortSignal) =>
       get(paginated(WorkflowSummary), `/v1/workflows/mine?${listParams(query)}`, signal),
     get: (id: string, signal?: AbortSignal) => get(WorkflowDetail, `/v1/workflows/${id}`, signal),
-    fileLink: (id: string) => get(FileLink, `/v1/workflows/${id}/file`),
+    /** view: open a PDF in the browser; download: save it. */
+    fileLink: (id: string, mode: 'view' | 'download' = 'download') =>
+      get(FileLink, `/v1/workflows/${id}/file?mode=${mode}`),
     decide: (id: string, body: DecisionRequest) =>
       request(`/v1/workflows/${id}/decision`, { method: 'POST', body }).then((d) =>
         DecisionResult.parse(d),

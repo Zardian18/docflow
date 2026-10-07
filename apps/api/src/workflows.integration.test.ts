@@ -389,6 +389,25 @@ describe.skipIf(!TEST_DB_URL)('creator submission', () => {
       expect((await otherClient.get(`/v1/workflows/${workflowId}/file`)).statusCode).toBe(404);
     });
 
+    it('mode=view opens a PDF in the browser; downloads stay the default', async () => {
+      const view = (await creator.get(`/v1/workflows/${workflowId}/file?mode=view`)).json();
+      expect(view.url).toContain('disposition=inline');
+      const download = (await creator.get(`/v1/workflows/${workflowId}/file`)).json();
+      expect(download.url).toContain('disposition=attachment');
+      expect((await creator.get(`/v1/workflows/${workflowId}/file?mode=bogus`)).statusCode).toBe(
+        400,
+      );
+    });
+
+    it('a DOCX is always downloaded, even when viewing is asked for', async () => {
+      const docx = await submit(await upload(creator, docxBytes(), 'Contract.docx', DOCX), [
+        [ids.a!, 1],
+        [ids.b!, 2],
+      ]);
+      const view = (await creator.get(`/v1/workflows/${docx.json().id}/file?mode=view`)).json();
+      expect(view.url).toContain('disposition=attachment');
+    });
+
     it('the owner and Admin get a short-lived file link', async () => {
       for (const client of [creator, admin]) {
         const res = await client.get(`/v1/workflows/${workflowId}/file`);

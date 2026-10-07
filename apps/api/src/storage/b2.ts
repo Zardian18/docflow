@@ -9,7 +9,7 @@ import {
   S3ServiceException,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { attachmentDisposition, type StorageService } from './storage.js';
+import { contentDisposition, type StorageService } from './storage.js';
 
 export interface B2Config {
   endpoint: string;
@@ -53,13 +53,14 @@ export function createB2Storage(config: B2Config): StorageService {
       };
     },
 
-    async presignGet(key, { fileName, expiresInSeconds }) {
+    async presignGet(key, { fileName, expiresInSeconds, disposition, contentType }) {
       const url = await getSignedUrl(
         s3,
         new GetObjectCommand({
           Bucket,
           Key: key,
-          ResponseContentDisposition: attachmentDisposition(fileName),
+          ResponseContentDisposition: contentDisposition(fileName, disposition),
+          ...(contentType ? { ResponseContentType: contentType } : {}),
         }),
         { expiresIn: expiresInSeconds },
       );
