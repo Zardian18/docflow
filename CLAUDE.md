@@ -50,6 +50,12 @@ Files: `apps/api/src/storage/` (`StorageService`; B2 in production, `MemoryStora
 
 Measured Render cold start: ~23–33 s for the first request after the service sleeps; warm ~0.2–0.5 s. The cron tick runs every 30 min so it does not act as a keep-alive (D15).
 
+Security (Phase 7, `docs/security.md`):
+- **Client IP:** `request.ip` trusts exactly `TRUSTED_PROXY_HOPS` proxies (3 on Render, measured). Never set `trustProxy: true`, which lets clients spoof IPs and bypass the rate limits.
+- **Submitted files** live at `documents/<workflowId>`. Browsers only ever get write URLs for `uploads/…`.
+- **Web headers:** the security headers, CSP included, are generated into `dist/_headers` by `apps/web/vite.config.ts`. When adding a new external origin the browser calls, add it there.
+- **Dependencies:** `pnpm audit --audit-level high` runs in CI. Overrides and justified ignores live in `pnpm-workspace.yaml`.
+
 Version notes: TypeScript is pinned to 6.0.x because typescript-eslint doesn't support 7.x yet. pnpm only runs install scripts for packages listed under `allowBuilds` in `pnpm-workspace.yaml` (`pnpm approve-builds <pkg>`).
 
 ## Invariants that must never be broken

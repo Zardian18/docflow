@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
@@ -20,7 +20,7 @@ import { authPlugin } from './plugins/auth.js';
 import { csrfPlugin } from './plugins/csrf.js';
 import { authRoutes } from './routes/auth.js';
 import { companyRoutes } from './routes/companies.js';
-import type { Limits } from './routes/deps.js';
+import { DEFAULT_LIMITS, type Limits } from './routes/deps.js';
 import { employeeRoutes } from './routes/employees.js';
 import { lookupRoutes } from './routes/lookups.js';
 import { roleRoutes } from './routes/roles.js';
@@ -28,6 +28,7 @@ import { uploadRoutes } from './routes/uploads.js';
 import { workflowRoutes } from './routes/workflows.js';
 import { adminWorkflowRoutes } from './routes/admin-workflows.js';
 import { approvalRoutes } from './routes/approvals.js';
+import { runMaintenance } from './maintenance.js';
 import type { EmailProvider } from './notify/outbox.js';
 import { createB2Storage } from './storage/b2.js';
 import type { StorageService } from './storage/storage.js';
@@ -67,6 +68,7 @@ function storageFromEnv(env: Env): StorageService {
     head: unavailable,
     readRange: unavailable,
     stream: unavailable,
+    copy: unavailable,
     delete: unavailable,
   };
 }
@@ -89,16 +91,32 @@ export async function buildApp({
   storage: storageOverride,
 }: AppDeps) {
   const storage = storageOverride ?? storageFromEnv(env);
-  const limits: Limits = { authAttemptsPerMinute: 5, ...limitOverrides };
+  const limits: Limits = { ...DEFAULT_LIMITS, ...limitOverrides };
 
   const app = Fastify({
     logger: {
       level: env.LOG_LEVEL,
-      redact: ['req.headers.authorization', 'req.headers.cookie', 'req.headers["x-tick-secret"]'],
+      // Method and path only: query strings carry search terms (names, emails) and links
+      // carry tokens, and neither belongs in logs (Phase 7 finding 8)
+      serializers: {
+        req: (req: { method: string; url: string }) => ({
+          method: req.method,
+          path: req.url.split('?')[0],
+        }),
+      },
       ...(env.NODE_ENV === 'development' ? { transport: { target: 'pino-pretty' } } : {}),
     },
-    trustProxy: true,
+    // Our own id per request; a client-sent x-request-id is not trusted
+    requestIdHeader: false,
+    genReqId: () => randomUUID(),
+    // Only the measured proxy hops; a client-supplied X-Forwarded-For entry can't become
+    // request.ip, which keys the rate limits (Phase 7 finding 1)
+    trustProxy: (_address: string, hop: number) => hop < env.TRUSTED_PROXY_HOPS,
   }).withTypeProvider<ZodTypeProvider>();
+
+  app.addHook('onRequest', async (request, reply) => {
+    reply.header('x-request-id', request.id);
+  });
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
@@ -127,12 +145,20 @@ export async function buildApp({
       });
     }
     if (statusCode < 500) {
-      return reply
-        .code(statusCode)
-        .send({ error: 'BAD_REQUEST', message: (error as Error).message });
+      // Framework errors (bad JSON, wrong content type, body too large) get a fixed message
+      // rather than the parser's own text (Phase 7 finding 7)
+      request.log.info({ code: (error as { code?: string }).code, statusCode }, 'request refused');
+      return reply.code(statusCode).send({
+        error: 'BAD_REQUEST',
+        message:
+          statusCode === 413 ? 'The request is too large.' : 'The request could not be processed.',
+      });
     }
     request.log.error({ err: error }, 'unhandled error');
-    return reply.code(500).send({ error: 'INTERNAL', message: 'Something went wrong' });
+    return reply.code(500).send({
+      error: 'INTERNAL',
+      message: `Something went wrong. Reference: ${request.id}`,
+    });
   });
 
   await app.register(helmet);
@@ -146,7 +172,7 @@ export async function buildApp({
   await app.register(rateLimit, { global: false, hook: 'preHandler' });
   await app.register(csrfPlugin, {
     webOrigin: env.WEB_ORIGIN,
-    exemptPaths: [TICK_PATH, '/internal/diag-ip'],
+    exemptPaths: [TICK_PATH],
   });
   await app.register(authPlugin, { db });
 
@@ -184,32 +210,17 @@ export async function buildApp({
   await app.register(approvalRoutes, { ...deps, prefix: '/v1/approvals' });
   await app.register(adminWorkflowRoutes, { ...deps, prefix: '/v1/admin/workflows' });
 
-  // TEMPORARY (Phase 7, finding #1): shows which client-IP headers reach the app on Render,
-  // so trustProxy can be set to the real hop count. Secret-protected; removed in the next PR.
-  app.post('/internal/diag-ip', async (request, reply) => {
-    const provided = request.headers['x-tick-secret'];
-    if (
-      !secretsMatch(typeof provided === 'string' ? provided : undefined, env.TICK_SHARED_SECRET)
-    ) {
-      return reply.code(401).send({ error: 'unauthorized' });
-    }
-    const h = request.headers;
-    return {
-      xForwardedFor: h['x-forwarded-for'] ?? null,
-      cfConnectingIp: h['cf-connecting-ip'] ?? null,
-      trueClientIp: h['true-client-ip'] ?? null,
-      xRealIp: h['x-real-ip'] ?? null,
-      socket: request.socket.remoteAddress ?? null,
-    };
-  });
-
-  // Retry tick, called by infra/cron-worker. Phase 5 adds the outbox retry logic.
+  // Called by infra/cron-worker. Housekeeping now; Phase 5 adds the outbox retry.
   app.post(
     TICK_PATH,
     {
       schema: {
         response: {
-          200: z.object({ retried: z.number().int() }),
+          200: z.object({
+            retried: z.number().int(),
+            uploadsRemoved: z.number().int(),
+            sessionsPurged: z.number().int(),
+          }),
           401: z.object({ error: z.literal('unauthorized') }),
         },
       },
@@ -221,7 +232,9 @@ export async function buildApp({
       ) {
         return reply.code(401).send({ error: 'unauthorized' as const });
       }
-      return { retried: 0 };
+      const housekeeping = await runMaintenance(db, storage, request.log);
+      request.log.info(housekeeping, 'tick');
+      return { retried: 0, ...housekeeping };
     },
   );
 

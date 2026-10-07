@@ -37,10 +37,11 @@ jobs:
       VITE_API_BASE_URL: https://docflow-xayj.onrender.com
 
     steps:
-      - uses: actions/checkout@v7
+      # Actions pinned to commit SHAs (Phase 7 finding 12)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # pnpm version comes from package.json "packageManager"
-      - uses: pnpm/setup@v3
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
           runtime: node@24
           cache: true
@@ -55,3 +56,5 @@ jobs:
       - run: pnpm format:check
       - run: pnpm test
       - run: pnpm build
+      # Fails on a new high/critical advisory; ignores are justified in pnpm-workspace.yaml
+      - run: pnpm audit --audit-level high

@@ -21,8 +21,14 @@ const EnvSchema = z
     // Neon direct connection string (migrations); falls back to DATABASE_URL
     DATABASE_URL_DIRECT: z.url().optional(),
 
-    // Exact origin of the web app, for CORS with credentials
-    WEB_ORIGIN: z.url(),
+    // Exact origin of the web app, for CORS with credentials. Normalised to scheme://host[:port]
+    // so a trailing slash or path in the dashboard value can't break the Origin check.
+    WEB_ORIGIN: z.url().transform((v) => new URL(v).origin),
+
+    // Proxies between the client and this process, counted from the socket. Measured on Render
+    // (2026-10-06): Render's router, its internal hop and Cloudflare's edge = 3. request.ip is
+    // the address that many hops back in X-Forwarded-For; anything a client prepends is ignored.
+    TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(3),
 
     // None until a real domain exists (plan.md §2.3), then lax
     SESSION_COOKIE_SAMESITE: z.enum(['none', 'lax', 'strict']).default('none'),

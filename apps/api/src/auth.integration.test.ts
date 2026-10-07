@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from './app.js';
 import type { Db } from './db/client.js';
+import { SESSION_COOKIE } from './plugins/auth.js';
 import { testEnv } from './test-helpers.js';
 import {
   Client,
@@ -44,7 +45,7 @@ describe.skipIf(!TEST_DB_URL)('auth', () => {
       });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toMatchObject({ email: 'admin@docflow.test', permission: 'ADMIN' });
-      const cookie = res.cookies.find((c) => c.name === 'df_session');
+      const cookie = res.cookies.find((c) => c.name === SESSION_COOKIE);
       expect(cookie).toMatchObject({ httpOnly: true, secure: true, sameSite: 'None', path: '/' });
     });
 
@@ -105,10 +106,21 @@ describe.skipIf(!TEST_DB_URL)('auth', () => {
       expect((await replay.get('/v1/auth/me')).statusCode).toBe(401);
     });
 
+    it('signing in again ends the session the browser already had (Phase 7 finding 6)', async () => {
+      const client = await new Client(app).login('admin@docflow.test');
+      const before = client.cookie;
+      await client.login('admin@docflow.test');
+      expect(client.cookie).not.toBe(before);
+      const old = new Client(app);
+      old.cookie = before;
+      expect((await old.get('/v1/auth/me')).statusCode).toBe(401);
+      expect((await client.get('/v1/auth/me')).statusCode).toBe(200);
+    });
+
     it('rejects a missing or forged cookie with 401', async () => {
       expect((await new Client(app).get('/v1/auth/me')).statusCode).toBe(401);
       const forged = new Client(app);
-      forged.cookie = 'df_session=not-a-real-token';
+      forged.cookie = `${SESSION_COOKIE}=not-a-real-token`;
       expect((await forged.get('/v1/auth/me')).statusCode).toBe(401);
     });
 
@@ -249,6 +261,78 @@ describe.skipIf(!TEST_DB_URL)('auth', () => {
       );
     }
     expect(statuses).toEqual([401, 401, 401, 429]);
+    await limited.close();
+  });
+
+  it('can’t be bypassed by faking X-Forwarded-For (Phase 7 finding 1)', async () => {
+    const limited = await buildApp({
+      env: testEnv({ DATABASE_URL: TEST_DB_URL ?? '' }),
+      db,
+      limits: { authAttemptsPerMinute: 3 },
+    });
+    // The header exactly as it reaches the app on Render, with a different fake IP prepended
+    // each time: client, Cloudflare edge, Render internal hop (socket is Render's router)
+    const statuses = [];
+    for (let i = 0; i < 4; i++) {
+      const res = await limited.inject({
+        method: 'POST',
+        url: '/v1/auth/login',
+        headers: {
+          origin: testEnv().WEB_ORIGIN,
+          'content-type': 'application/json',
+          'x-forwarded-for': `10.0.0.${i}, 1.2.3.${i}, 103.250.151.88, 172.69.178.211, 10.25.16.5`,
+        },
+        payload: JSON.stringify({ email: 'admin@docflow.test', password: 'wrong-wrong-wrong' }),
+      });
+      statuses.push(res.statusCode);
+    }
+    expect(statuses).toEqual([401, 401, 401, 429]);
+    await limited.close();
+  });
+
+  it('limits guesses at one account from many IPs', async () => {
+    const limited = await buildApp({
+      env: testEnv({ DATABASE_URL: TEST_DB_URL ?? '' }),
+      db,
+      limits: { authAttemptsPerMinute: 100, loginAttemptsPerEmail: 3 },
+    });
+    const statuses = [];
+    for (let i = 0; i < 4; i++) {
+      const res = await limited.inject({
+        method: 'POST',
+        url: '/v1/auth/login',
+        headers: {
+          origin: testEnv().WEB_ORIGIN,
+          'content-type': 'application/json',
+          'x-forwarded-for': `198.51.100.${i}, 172.69.178.211, 10.25.16.5`,
+        },
+        payload: JSON.stringify({ email: 'Admin@docflow.test', password: 'wrong-wrong-wrong' }),
+      });
+      statuses.push(res.statusCode);
+    }
+    expect(statuses).toEqual([401, 401, 401, 429]);
+    await limited.close();
+  });
+
+  it('limits password changes per signed-in user', async () => {
+    const limited = await buildApp({
+      env: testEnv({ DATABASE_URL: TEST_DB_URL ?? '' }),
+      db,
+      limits: { passwordChangesPerMinute: 2 },
+    });
+    const client = await new Client(limited).login('admin@docflow.test');
+    const statuses = [];
+    for (let i = 0; i < 3; i++) {
+      statuses.push(
+        (
+          await client.post('/v1/auth/change-password', {
+            currentPassword: 'not-my-password',
+            newPassword: 'another-password-1',
+          })
+        ).statusCode,
+      );
+    }
+    expect(statuses).toEqual([400, 400, 429]);
     await limited.close();
   });
 });

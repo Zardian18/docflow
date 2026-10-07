@@ -21,9 +21,9 @@ import { reassignStep } from '../domain/reassign.js';
 import { submitWorkflow } from '../domain/submit.js';
 import { notFound } from '../errors.js';
 import { deliver, type EmailProvider } from '../notify/outbox.js';
-import { currentUser, requirePermission } from '../plugins/auth.js';
+import { currentUser, requirePermission, requireUser } from '../plugins/auth.js';
 import type { StorageService } from '../storage/storage.js';
-import type { RouteDeps } from './deps.js';
+import { perUserLimit, type RouteDeps } from './deps.js';
 
 const FILE_LINK_SECONDS = 5 * 60;
 
@@ -92,11 +92,12 @@ const StepParams = z.object({ id: z.uuid(), stepId: z.uuid() });
 
 export const workflowRoutes: FastifyPluginAsyncZod<
   RouteDeps & { storage: StorageService; email: EmailProvider | null }
-> = async (app, { db, storage, email }) => {
+> = async (app, { db, storage, email, limits }) => {
   app.post(
     '/',
     {
       onRequest: requirePermission('CREATOR'),
+      config: perUserLimit(limits.userActionsPerMinute),
       schema: { body: WorkflowCreate, response: { 201: z.object({ id: z.uuid() }) } },
     },
     async (request, reply) => {
@@ -144,7 +145,7 @@ export const workflowRoutes: FastifyPluginAsyncZod<
 
   app.get(
     '/:id',
-    { schema: { params: IdParam, response: { 200: WorkflowDetail } } },
+    { onRequest: requireUser, schema: { params: IdParam, response: { 200: WorkflowDetail } } },
     async (request) => {
       const user = currentUser(request);
       const id = request.params.id;
@@ -233,6 +234,7 @@ export const workflowRoutes: FastifyPluginAsyncZod<
   app.get(
     '/:id/file',
     {
+      onRequest: requireUser,
       schema: {
         params: IdParam,
         querystring: z.object({ mode: z.enum(['view', 'download']).default('download') }),
@@ -259,6 +261,7 @@ export const workflowRoutes: FastifyPluginAsyncZod<
     '/:id/decision',
     {
       onRequest: requirePermission('APPROVER', 'CFO'),
+      config: perUserLimit(limits.userActionsPerMinute),
       schema: { params: IdParam, body: DecisionRequest, response: { 200: DecisionResult } },
     },
     async (request) => {

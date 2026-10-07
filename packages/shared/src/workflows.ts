@@ -26,16 +26,17 @@ export function mimeForFileName(name: string): FileMime | null {
   return null;
 }
 
+// Path separators, control characters (C0, DEL, C1) and bidirectional overrides, which can
+// make "invoice‮fdp.exe" display as "invoiceexe.pdf" (Phase 7 finding 11)
+// eslint-disable-next-line no-control-regex
+const FORBIDDEN_IN_FILE_NAME = /[/\\\u0000-\u001f\u007f-\u009f؜‎‏‪-‮⁦-⁩]/u;
+
 export const FileName = z
   .string()
   .trim()
   .min(1)
   .max(200, 'File name is too long')
-  // No path separators or control characters
-  .refine(
-    (n) => ![...n].some((ch) => ch === '/' || ch === '\\' || ch.charCodeAt(0) < 0x20),
-    'File name contains invalid characters',
-  );
+  .refine((n) => !FORBIDDEN_IN_FILE_NAME.test(n), 'File name contains invalid characters');
 
 export const PresignRequest = z
   .object({

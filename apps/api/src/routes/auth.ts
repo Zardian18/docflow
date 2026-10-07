@@ -8,12 +8,13 @@ import {
   type LoginRequest as LoginBody,
 } from '@docflow/shared';
 import { and, eq } from 'drizzle-orm';
+import type { FastifyRequest } from 'fastify';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { getDummyHash, hashPassword, verifyPassword } from '../auth/crypto.js';
 import { consumePasswordToken } from '../auth/password-links.js';
 import { createSession, revokeEmployeeSessions, revokeSession } from '../auth/sessions.js';
 import { employees, roles } from '../db/schema.js';
-import type { RouteDeps } from './deps.js';
+import { perUserLimit, type RouteDeps } from './deps.js';
 import { AppError, badRequest } from '../errors.js';
 import { currentUser, requireUser, SESSION_COOKIE } from '../plugins/auth.js';
 
@@ -40,9 +41,30 @@ export const authRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db, en
     },
   });
 
+  // A second, slower limit per account from any number of IPs (Phase 7 finding 1). The
+  // plugin runs only one hook-style limiter per request, so this one is checked by hand.
+  const checkEmail = app.createRateLimit({
+    max: limits.loginAttemptsPerEmail,
+    timeWindow: '15 minutes',
+    keyGenerator: (request) => {
+      const email = (request.body as Partial<LoginBody> | undefined)?.email;
+      return `email|${typeof email === 'string' ? email.trim().toLowerCase() : ''}`;
+    },
+  });
+  const perEmail = async (request: FastifyRequest) => {
+    const result = await checkEmail(request);
+    if (!result.isAllowed && result.isExceeded) {
+      throw new AppError(429, 'RATE_LIMITED', 'Too many attempts. Please wait and try again.');
+    }
+  };
+
   app.post(
     '/login',
-    { schema: { body: LoginRequest, response: { 200: Me } }, config: rateLimit('email') },
+    {
+      schema: { body: LoginRequest, response: { 200: Me } },
+      config: rateLimit('email'),
+      preHandler: perEmail,
+    },
     async (request, reply) => {
       const { email, password } = request.body;
       const [row] = await db
@@ -68,9 +90,13 @@ export const authRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db, en
       }
       if (!(await verifyPassword(row.passwordHash, password))) throw invalidCredentials();
 
-      const { token, expiresAt } = await createSession(db, row.id, env.SESSION_TTL_HOURS, {
-        ip: request.ip,
-        userAgent: request.headers['user-agent'],
+      const { token, expiresAt } = await db.transaction(async (tx) => {
+        // Signing in over an existing session (another account, or the same one) ends it
+        if (request.user) await revokeSession(tx, request.user.sessionId);
+        return createSession(tx, row.id, env.SESSION_TTL_HOURS, {
+          ip: request.ip,
+          userAgent: request.headers['user-agent'],
+        });
       });
       reply.setCookie(SESSION_COOKIE, token, { ...cookieOptions, expires: expiresAt });
       request.log.info({ employeeId: row.id }, 'login');
@@ -109,7 +135,11 @@ export const authRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db, en
 
   app.post(
     '/change-password',
-    { preHandler: requireUser, schema: { body: ChangePasswordRequest } },
+    {
+      onRequest: requireUser,
+      config: perUserLimit(limits.passwordChangesPerMinute),
+      schema: { body: ChangePasswordRequest },
+    },
     async (request, reply) => {
       const user = currentUser(request);
       const { currentPassword, newPassword } = request.body;
@@ -123,12 +153,15 @@ export const authRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db, en
       if (!row?.passwordHash || !(await verifyPassword(row.passwordHash, currentPassword))) {
         throw new AppError(400, 'WRONG_PASSWORD', 'Your current password is incorrect');
       }
-      await db
-        .update(employees)
-        .set({ passwordHash: await hashPassword(newPassword), updatedAt: new Date() })
-        .where(eq(employees.id, user.id));
-      // Sign out every other device; keep this one
-      await revokeEmployeeSessions(db, user.id, user.sessionId);
+      const passwordHash = await hashPassword(newPassword);
+      await db.transaction(async (tx) => {
+        await tx
+          .update(employees)
+          .set({ passwordHash, updatedAt: new Date() })
+          .where(eq(employees.id, user.id));
+        // Sign out every other device; keep this one
+        await revokeEmployeeSessions(tx, user.id, user.sessionId);
+      });
       return reply.code(204).send();
     },
   );
@@ -139,23 +172,28 @@ export const authRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db, en
     { schema: { body: SetPasswordRequest }, config: rateLimit() },
     async (request, reply) => {
       const { token, password } = request.body;
-      const employeeId = await consumePasswordToken(db, token);
-      if (!employeeId) {
-        throw new AppError(
-          400,
-          'INVALID_TOKEN',
-          'This link is invalid or has expired. Ask your administrator for a new one.',
-        );
-      }
-      const updated = await db
-        .update(employees)
-        .set({ passwordHash: await hashPassword(password), updatedAt: new Date() })
-        .where(and(eq(employees.id, employeeId), eq(employees.isActive, true)))
-        .returning({ id: employees.id });
-      if (updated.length === 0) {
-        throw new AppError(400, 'INVALID_TOKEN', 'This account is not active.');
-      }
-      await revokeEmployeeSessions(db, employeeId);
+      const passwordHash = await hashPassword(password);
+      // Token use, new password and sign-out everywhere succeed or fail together
+      const employeeId = await db.transaction(async (tx) => {
+        const id = await consumePasswordToken(tx, token);
+        if (!id) {
+          throw new AppError(
+            400,
+            'INVALID_TOKEN',
+            'This link is invalid or has expired. Ask your administrator for a new one.',
+          );
+        }
+        const updated = await tx
+          .update(employees)
+          .set({ passwordHash, updatedAt: new Date() })
+          .where(and(eq(employees.id, id), eq(employees.isActive, true)))
+          .returning({ id: employees.id });
+        if (updated.length === 0) {
+          throw new AppError(400, 'INVALID_TOKEN', 'This account is not active.');
+        }
+        await revokeEmployeeSessions(tx, id);
+        return id;
+      });
       request.log.info({ employeeId }, 'password set');
       return reply.code(204).send();
     },

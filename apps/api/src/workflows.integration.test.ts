@@ -114,6 +114,31 @@ describe.skipIf(!TEST_DB_URL)('creator submission', () => {
     });
 
   describe('presign', () => {
+    it('refuses file names with control or bidirectional-override characters', async () => {
+      for (const fileName of [
+        'invoice‮fdp.pdf',
+        'a⁦b.pdf',
+        'del\u007f.pdf',
+        'c1\u0085.pdf',
+        'tab\t.pdf',
+        'dir/a.pdf',
+        'dir\\a.pdf',
+      ]) {
+        const res = await creator.post('/v1/uploads/presign', {
+          fileName,
+          contentType: PDF,
+          size: 64,
+        });
+        expect(res.statusCode, JSON.stringify(fileName)).toBe(400);
+      }
+      const ok = await creator.post('/v1/uploads/presign', {
+        fileName: 'Facture été 2026 (v2).pdf',
+        contentType: PDF,
+        size: 64,
+      });
+      expect(ok.statusCode).toBe(200);
+    });
+
     it('gives a Creator a signed upload URL for a PDF or DOCX', async () => {
       const res = await creator.post('/v1/uploads/presign', {
         fileName: 'a.docx',
@@ -315,7 +340,7 @@ describe.skipIf(!TEST_DB_URL)('creator submission', () => {
         [ids.b!, 2],
       ]);
       expect(out.json().error).toBe('FILE_SIZE_MISMATCH');
-      expect(storage.deleted).toHaveLength(1);
+      expect(storage.objects.size).toBe(0);
     });
 
     it('deletes and refuses a file whose contents are not really a PDF', async () => {
@@ -325,7 +350,34 @@ describe.skipIf(!TEST_DB_URL)('creator submission', () => {
         [ids.b!, 2],
       ]);
       expect(out.json().error).toBe('FILE_TYPE_MISMATCH');
-      expect(storage.deleted).toHaveLength(1);
+      expect(storage.objects.size).toBe(0);
+    });
+
+    it('locks the verified file away from the Creator’s upload URL (Phase 7 finding 2)', async () => {
+      const id = await upload();
+      const out = await submit(id, [
+        [ids.a!, 1],
+        [ids.b!, 2],
+      ]);
+      expect(out.statusCode, out.body).toBe(201);
+      const workflowId = out.json().id as string;
+      const [row] = (await db.execute(sql`select file_key from workflows where id = ${workflowId}`))
+        .rows as { file_key: string }[];
+      expect(row!.file_key).toBe(`documents/${workflowId}`);
+      const original = pdfBytes();
+      expect(storage.objects.get(row!.file_key)?.body.equals(original)).toBe(true);
+      // The upload object is gone; re-using the still-valid PUT URL can't touch the document
+      const [up] = (await db.execute(sql`select object_key from uploads where id = ${id}`))
+        .rows as { object_key: string }[];
+      expect(storage.objects.has(up!.object_key)).toBe(false);
+      storage.upload(up!.object_key, pdfBytes(64).fill(0x41, 20), PDF);
+      expect(storage.objects.get(row!.file_key)?.body.equals(original)).toBe(true);
+    });
+
+    it('leaves no locked copy behind when the chain is refused', async () => {
+      const out = await submit(await upload(), [[ids.a!, 1]]);
+      expect(out.statusCode).toBe(400);
+      expect([...storage.objects.keys()].some((k) => k.startsWith('documents/'))).toBe(false);
     });
 
     it('accepts a real DOCX (zip) file', async () => {

@@ -40,6 +40,8 @@ export interface StorageService {
   /** Bytes [start, end] inclusive. */
   readRange(key: string, start: number, end: number): Promise<Buffer>;
   stream(key: string): Promise<Readable>;
+  /** Server-side copy within the bucket; the bytes never pass through the API. */
+  copy(fromKey: string, toKey: string): Promise<void>;
   delete(key: string): Promise<void>;
 }
 

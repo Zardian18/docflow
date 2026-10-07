@@ -4,6 +4,7 @@ import { eq, sql } from 'drizzle-orm';
 import type { FastifyInstance, InjectOptions } from 'fastify';
 import { buildApp } from './app.js';
 import { hashPassword } from './auth/crypto.js';
+import { SESSION_COOKIE } from './plugins/auth.js';
 import { createDb, type Db } from './db/client.js';
 import { runMigrations } from './db/migrations.js';
 import { employees, roles } from './db/schema.js';
@@ -74,7 +75,12 @@ export async function testApp(
   return buildApp({
     env: testEnv({ DATABASE_URL: TEST_DB_URL ?? '', ...overrides }),
     db,
-    limits: { authAttemptsPerMinute: 1000 },
+    limits: {
+      authAttemptsPerMinute: 1000,
+      loginAttemptsPerEmail: 1000,
+      passwordChangesPerMinute: 1000,
+      userActionsPerMinute: 1000,
+    },
     storage,
   });
 }
@@ -99,8 +105,9 @@ export class Client {
       },
       ...(body !== undefined ? { payload: JSON.stringify(body) } : {}),
     });
-    const setCookie = res.cookies.find((c) => c.name === 'df_session');
-    if (setCookie) this.cookie = setCookie.value ? `df_session=${setCookie.value}` : undefined;
+    const setCookie = res.cookies.find((c) => c.name === SESSION_COOKIE);
+    if (setCookie)
+      this.cookie = setCookie.value ? `${SESSION_COOKIE}=${setCookie.value}` : undefined;
     return res;
   }
 

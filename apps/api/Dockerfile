@@ -2,7 +2,8 @@
 # Context ".", Dockerfile Path "./apps/api/Dockerfile") so the build can see
 # packages/shared and the root lockfile.
 
-FROM node:24-slim AS base
+# Pinned by digest (Phase 7 finding 12); update deliberately: docker pull node:24-slim and copy the digest
+FROM node:24-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS base
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0
@@ -21,7 +22,7 @@ COPY apps/api apps/api
 RUN pnpm --filter "@docflow/api..." run build \
  && pnpm --filter @docflow/api deploy --prod /out
 
-FROM node:24-slim AS runtime
+FROM node:24-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=build --chown=node:node /out ./
