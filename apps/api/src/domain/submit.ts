@@ -6,7 +6,9 @@ import type { Db } from '../db/client.js';
 import { auditEvents, companies, uploads, workflowSteps, workflows } from '../db/schema.js';
 import { AppError, conflict, isUniqueViolation } from '../errors.js';
 import type { StorageService } from '../storage/storage.js';
+import { enqueue } from '../notify/outbox.js';
 import { activeCfo, chainsDiffer, checkChain, defaultApproversFor } from './chain.js';
+import { yourTurnMessages } from './decide.js';
 
 type SubmitInput = z.output<typeof WorkflowCreate>;
 
@@ -36,7 +38,7 @@ export async function submitWorkflow(
   storage: StorageService,
   creatorId: string,
   input: SubmitInput,
-): Promise<string> {
+): Promise<{ id: string; outboxIds: string[] }> {
   // ---- The upload: the caller's own, unused, unexpired
   const [upload] = await db
     .select()
@@ -85,7 +87,7 @@ export async function submitWorkflow(
 
   // ---- Company, CFO and chain (plan.md §4.7)
   const [company] = await db
-    .select({ id: companies.id, isActive: companies.isActive })
+    .select({ id: companies.id, name: companies.name, isActive: companies.isActive })
     .from(companies)
     .where(eq(companies.id, input.companyId));
   if (!company?.isActive) {
@@ -157,6 +159,7 @@ export async function submitWorkflow(
           employeeName: a.name,
           employeeEmail: a.email,
           status: a.position === 1 ? ('PENDING' as const) : ('WAITING' as const),
+          activatedAt: a.position === 1 ? new Date() : null,
         })),
         {
           workflowId,
@@ -183,7 +186,19 @@ export async function submitWorkflow(
           ],
         },
       });
-      return workflowId;
+      // "Your turn" for everyone at step 1 (plan.md §4.6), delivered after commit
+      const outboxIds = await enqueue(
+        tx,
+        yourTurnMessages(
+          workflowId,
+          1,
+          chain
+            .filter((a) => a.position === 1)
+            .map((a) => ({ employeeId: a.employeeId, employeeEmail: a.email, isCfo: false })),
+          { fileName: upload.fileName, companyName: company.name },
+        ),
+      );
+      return { id: workflowId, outboxIds };
     });
   } catch (err) {
     if (isUniqueViolation(err, 'workflows_upload_unique')) {

@@ -235,6 +235,8 @@ export const workflowSteps = pgTable(
     employeeEmail: text('employee_email').notNull(),
     isCfo: boolean('is_cfo').notNull().default(false),
     status: stepStatusEnum('status').notNull(),
+    /** When this step became PENDING (drives “Waiting since”). */
+    activatedAt: timestamp('activated_at', { withTimezone: true }),
     decidedAt: timestamp('decided_at', { withTimezone: true }),
     remarks: text('remarks'),
   },
@@ -257,7 +259,48 @@ export const auditEvents = pgTable(
     actorId: uuid('actor_id').references(() => employees.id),
     eventType: text('event_type').notNull(),
     payload: jsonb('payload').notNull().default({}),
-    createdAt: createdAt(),
+    // clock_timestamp(), not now(): several events in one transaction must keep their order
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .default(sql`clock_timestamp()`),
   },
   (t) => [index('audit_events_workflow_idx').on(t.workflowId, t.createdAt)],
+);
+
+// ---- Phase 4: notifications outbox (plan.md §2.4, invariants 6 and 10) ------
+
+export const outboxStatusEnum = pgEnum('outbox_status', ['pending', 'sent', 'failed', 'skipped']);
+
+/**
+ * Written in the same transaction as the decision that causes it; delivery is attempted
+ * synchronously right after commit, and the cron tick retries only pending/failed rows.
+ */
+export const notificationOutbox = pgTable(
+  'notification_outbox',
+  {
+    id: id(),
+    workflowId: uuid('workflow_id')
+      .notNull()
+      .references(() => workflows.id),
+    recipientId: uuid('recipient_id')
+      .notNull()
+      .references(() => employees.id),
+    toEmail: text('to_email').notNull(),
+    template: text('template').notNull(),
+    payload: jsonb('payload').notNull().default({}),
+    status: outboxStatusEnum('status').notNull().default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull().defaultNow(),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    dedupeKey: text('dedupe_key').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('notification_outbox_dedupe_unique').on(t.dedupeKey),
+    index('notification_outbox_due_idx')
+      .on(t.nextAttemptAt)
+      .where(sql`${t.status} in ('pending', 'failed')`),
+    index('notification_outbox_workflow_idx').on(t.workflowId),
+  ],
 );

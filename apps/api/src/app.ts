@@ -26,6 +26,8 @@ import { lookupRoutes } from './routes/lookups.js';
 import { roleRoutes } from './routes/roles.js';
 import { uploadRoutes } from './routes/uploads.js';
 import { workflowRoutes } from './routes/workflows.js';
+import { approvalRoutes } from './routes/approvals.js';
+import type { EmailProvider } from './notify/outbox.js';
 import { createB2Storage } from './storage/b2.js';
 import type { StorageService } from './storage/storage.js';
 
@@ -35,6 +37,8 @@ export interface AppDeps {
   limits?: Partial<Limits>;
   /** Defaults to Backblaze B2 from env; tests pass in-memory storage. */
   storage?: StorageService;
+  /** Email delivery; null until Phase 5 wires a real provider (rows are marked skipped). */
+  email?: EmailProvider | null;
 }
 
 /** Real storage when configured; otherwise every file operation fails with a clear 503. */
@@ -77,6 +81,7 @@ function secretsMatch(provided: string | undefined, expected: string): boolean {
 }
 
 export async function buildApp({
+  email = null,
   env,
   db,
   limits: limitOverrides,
@@ -171,7 +176,8 @@ export async function buildApp({
   await app.register(lookupRoutes, deps);
   await app.register(companyRoutes, { ...deps, prefix: '/v1/companies' });
   await app.register(uploadRoutes, { ...deps, storage, prefix: '/v1/uploads' });
-  await app.register(workflowRoutes, { ...deps, storage, prefix: '/v1/workflows' });
+  await app.register(workflowRoutes, { ...deps, storage, email, prefix: '/v1/workflows' });
+  await app.register(approvalRoutes, { ...deps, prefix: '/v1/approvals' });
 
   // Retry tick, called by infra/cron-worker. Phase 5 adds the outbox retry logic.
   app.post(
