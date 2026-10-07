@@ -65,6 +65,8 @@ export const ApprovalStats = z.object({
   approved: z.number().int().nonnegative(),
   rejected: z.number().int().nonnegative(),
   period: z.enum(['week', 'month']),
+  /** CFO only (0 for approvers): documents rejected before reaching the final step (D22). */
+  rejectedBeforeFinal: z.number().int().nonnegative(),
 });
 export type ApprovalStats = z.infer<typeof ApprovalStats>;
 
@@ -84,6 +86,18 @@ export const DecisionHistoryItem = z.object({
   currentPosition: z.number().int().positive(),
 });
 export type DecisionHistoryItem = z.infer<typeof DecisionHistoryItem>;
+
+/** A document rejected by an approver before it reached the CFO (D22). */
+export const RejectedBeforeFinalItem = z.object({
+  workflowId: z.uuid(),
+  fileName: z.string(),
+  companyName: z.string(),
+  rejectedBy: z.string(),
+  position: z.number().int().positive(),
+  reason: z.string().nullable(),
+  rejectedAt: z.iso.datetime({ offset: true }),
+});
+export type RejectedBeforeFinalItem = z.infer<typeof RejectedBeforeFinalItem>;
 
 // ---- Notification recipients (decisions.md D2) ------------------------------
 

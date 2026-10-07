@@ -201,3 +201,9 @@ So "as many as possible for free" resolves to **file storage as the real ceiling
   - **Layout:** below 1280 px the list switches to cards, so no column is ever cut off; the invoice column only appears on very wide screens.
 - **D9 reassign UI:** a **Reassign** action sits on each undecided step of the Admin document page. A reason is required, and the change shows in the Activity log.
 - **Indexes:** at 20,000 synthetic documents, every dashboard query ran in under 7 ms. The only one that scanned the whole table was the default "newest first" view, now served by an index on `(submitted_at, id)`: 6.9 ms → 0.1 ms. Search uses a contains-match and stays a sequential scan (≈6 ms at 20k rows); a trigram index is the upgrade path if the data ever grows much larger.
+
+### D22 — The CFO sees every rejection (owner, 7 Oct 2026)
+**Status: ANSWERED.** A rejection still ends the chain at once; later approvers are skipped (invariant 5). But the CFO must always be informed, whether a document is approved or rejected:
+- **Visibility:** the CFO named in a document's chain can open it read-only, file included, once it is rejected, even if it never reached their step. Other skipped approvers still can't.
+- **Dashboard:** the CFO dashboard has a **"Rejected before final approval"** tab, with a count, listing who rejected each document, at which position, their reason and the date.
+- **Email:** rejection emails already go to the Creator and the CFO (D2). They are delivered once Phase 5 email is live.

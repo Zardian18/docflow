@@ -16,6 +16,7 @@ import {
   PendingApprovalsResponse,
   PingResponse,
   PresignResponse,
+  RejectedBeforeFinalItem,
   Role,
   WorkflowDetail,
   WorkflowSummary,
@@ -223,6 +224,12 @@ export const api = {
       get(PendingApprovalsResponse, '/v1/approvals/pending', signal),
     history: (query: { page?: number; pageSize?: number }, signal?: AbortSignal) =>
       get(paginated(DecisionHistoryItem), `/v1/approvals/history?${listParams(query)}`, signal),
+    rejectedBeforeFinal: (query: { page?: number; pageSize?: number }, signal?: AbortSignal) =>
+      get(
+        paginated(RejectedBeforeFinalItem),
+        `/v1/approvals/rejected-before-final?${listParams(query)}`,
+        signal,
+      ),
   },
 };
 
