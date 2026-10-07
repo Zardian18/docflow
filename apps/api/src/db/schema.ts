@@ -212,6 +212,9 @@ export const workflows = pgTable(
     index('workflows_created_by_idx').on(t.createdBy, t.submittedAt),
     index('workflows_company_idx').on(t.companyId),
     index('workflows_status_idx').on(t.status),
+    // Admin Dashboard default view: newest first, id as tie-breaker (EXPLAIN in PR for Phase 6)
+    // Ascending: Postgres scans it backwards for the default newest-first order
+    index('workflows_submitted_idx').on(t.submittedAt, t.id),
   ],
 );
 

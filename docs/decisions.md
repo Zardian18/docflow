@@ -66,7 +66,7 @@ These become searchable/filterable columns on the Admin Dashboard alongside the 
 ---
 
 ### D7 — Dashboard Export button and stat cards
-**Status: recommendation only, not yet confirmed.** URS §5.8/§9 puts exports and summary statistics out of scope for v1; Figma's Admin Dashboard shows both. I still recommend **dropping Export** and keeping the four simple count cards (they're cheap and non-analytical). Confirm before Phase 6.
+**Status: ANSWERED (owner, 7 Oct 2026): keep the four count cards, no Export in v1.** Original note: URS §5.8/§9 puts exports and summary statistics out of scope for v1; Figma's Admin Dashboard shows both. I still recommend **dropping Export** and keeping the four simple count cards (they're cheap and non-analytical). Confirm before Phase 6.
 
 ---
 
@@ -193,3 +193,11 @@ So "as many as possible for free" resolves to **file storage as the real ceiling
   - a CFO step only to the current active CFO.
 - **Notifications before Phase 5:** every event writes its outbox rows (recipients per §4.6 / D2), but with no email provider configured the rows are marked `skipped`. Turning email on in Phase 5 does not flush a backlog of stale messages for old events. Logs record outbox ids and templates, never addresses.
 - **Status label:** while a parallel step is partly approved, the document still shows "Pending Approver (Position N)" until everyone in that step has approved (owner's wording rule).
+
+### Phase 6 notes (7 Oct 2026)
+- **Admin Dashboard:**
+  - **Filters:** status (including "pending at position N"), company, creator, submitted date range and search (document name, invoice number, vendor). All combine, and all live in the page URL.
+  - **Behaviour:** sortable headers, read-only for Admin, and a click-through to the full audit trail.
+  - **Layout:** below 1280 px the list switches to cards, so no column is ever cut off; the invoice column only appears on very wide screens.
+- **D9 reassign UI:** a **Reassign** action sits on each undecided step of the Admin document page. A reason is required, and the change shows in the Activity log.
+- **Indexes:** at 20,000 synthetic documents, every dashboard query ran in under 7 ms. The only one that scanned the whole table was the default "newest first" view, now served by an index on `(submitted_at, id)`: 6.9 ms → 0.1 ms. Search uses a contains-match and stays a sequential scan (≈6 ms at 20k rows); a trigram index is the upgrade path if the data ever grows much larger.

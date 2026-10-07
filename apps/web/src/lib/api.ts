@@ -1,4 +1,6 @@
 import {
+  AdminStats,
+  AdminWorkflowRow,
   ApiErrorBody,
   ApproverOption,
   CfoInfo,
@@ -18,15 +20,18 @@ import {
   WorkflowDetail,
   WorkflowSummary,
   type ChangePasswordRequest,
+  type AdminWorkflowQuery,
   type CompanyUpsert,
   type DecisionRequest,
   type EmployeeCreate,
   type EmployeeUpdate,
   type ListQuery,
   type LoginRequest,
+  type Permission,
   type RoleCreate,
   type RoleUpdate,
   type PresignRequest,
+  type ReassignRequest,
   type SetPasswordRequest,
   type WorkflowCreate,
 } from '@docflow/shared';
@@ -105,9 +110,10 @@ async function request(path: string, options: RequestOptions = {}): Promise<unkn
 const get = <T extends z.ZodType>(schema: T, path: string, signal?: AbortSignal) =>
   request(path, { signal }).then((d) => schema.parse(d) as z.output<T>);
 
-function listParams(query: Partial<ListQuery>) {
+/** Query string from a filter object; empty and undefined values are left out. */
+function listParams(query: object) {
   const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(query)) {
+  for (const [key, value] of Object.entries(query as Record<string, unknown>)) {
     if (value !== undefined && value !== '') params.set(key, String(value));
   }
   return params.toString();
@@ -141,7 +147,7 @@ export const api = {
   },
 
   employees: {
-    list: (query: Partial<ListQuery>, signal?: AbortSignal) =>
+    list: (query: Partial<ListQuery> & { permission?: Permission }, signal?: AbortSignal) =>
       get(paginated(Employee), `/v1/employees?${listParams(query)}`, signal),
     create: (body: EmployeeCreate) =>
       request('/v1/employees', { method: 'POST', body }).then((d) => Employee.parse(d)),
@@ -202,6 +208,14 @@ export const api = {
       request(`/v1/workflows/${id}/decision`, { method: 'POST', body }).then((d) =>
         DecisionResult.parse(d),
       ),
+  },
+
+  admin: {
+    workflows: (query: AdminWorkflowQuery, signal?: AbortSignal) =>
+      get(paginated(AdminWorkflowRow), `/v1/admin/workflows?${listParams(query)}`, signal),
+    stats: (signal?: AbortSignal) => get(AdminStats, '/v1/admin/workflows/stats', signal),
+    reassign: (workflowId: string, stepId: string, body: ReassignRequest) =>
+      request(`/v1/workflows/${workflowId}/steps/${stepId}/reassign`, { method: 'POST', body }),
   },
 
   approvals: {

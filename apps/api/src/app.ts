@@ -26,6 +26,7 @@ import { lookupRoutes } from './routes/lookups.js';
 import { roleRoutes } from './routes/roles.js';
 import { uploadRoutes } from './routes/uploads.js';
 import { workflowRoutes } from './routes/workflows.js';
+import { adminWorkflowRoutes } from './routes/admin-workflows.js';
 import { approvalRoutes } from './routes/approvals.js';
 import type { EmailProvider } from './notify/outbox.js';
 import { createB2Storage } from './storage/b2.js';
@@ -178,6 +179,7 @@ export async function buildApp({
   await app.register(uploadRoutes, { ...deps, storage, prefix: '/v1/uploads' });
   await app.register(workflowRoutes, { ...deps, storage, email, prefix: '/v1/workflows' });
   await app.register(approvalRoutes, { ...deps, prefix: '/v1/approvals' });
+  await app.register(adminWorkflowRoutes, { ...deps, prefix: '/v1/admin/workflows' });
 
   // Retry tick, called by infra/cron-worker. Phase 5 adds the outbox retry logic.
   app.post(

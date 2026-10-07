@@ -27,6 +27,8 @@ const ADMIN_ENDPOINTS: Array<[method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: st
   ['GET', `/v1/companies/${ZERO_ID}`],
   ['POST', '/v1/companies'],
   ['PUT', `/v1/companies/${ZERO_ID}`],
+  ['GET', '/v1/admin/workflows'],
+  ['GET', '/v1/admin/workflows/stats'],
   ['DELETE', `/v1/roles/${ZERO_ID}`],
   ['DELETE', `/v1/employees/${ZERO_ID}`],
   ['DELETE', `/v1/companies/${ZERO_ID}`],

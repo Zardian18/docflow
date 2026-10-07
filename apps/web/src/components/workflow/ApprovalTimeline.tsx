@@ -4,6 +4,7 @@ import {
   type WorkflowDetail,
   type WorkflowStep,
 } from '@docflow/shared';
+import type { ReactNode } from 'react';
 import { formatDate, formatDateTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
@@ -63,9 +64,12 @@ function stepLine(
 export function ApprovalTimeline({
   workflow,
   viewerId,
+  stepAction,
 }: {
   workflow: WorkflowDetail;
   viewerId?: string;
+  /** Optional control shown beside a step (Admin: Reassign). */
+  stepAction?: (step: WorkflowStep) => ReactNode;
 }) {
   const groups = groupBySteps(workflow.steps);
   return (
@@ -85,12 +89,13 @@ export function ApprovalTimeline({
           return (
             <li key={step.id} className="flex gap-3">
               <Dot status={step.status} />
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <p className="text-sm break-words">{line.title}</p>
                 {line.detail && (
                   <p className="text-muted-foreground text-xs break-words">{line.detail}</p>
                 )}
               </div>
+              {stepAction?.(step)}
             </li>
           );
         }
@@ -110,7 +115,7 @@ export function ApprovalTimeline({
                   return (
                     <li key={step.id} className="flex gap-2">
                       <Dot status={step.status} />
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <p className="text-sm break-words">
                           {line.title.replace(` (Position ${position})`, '')}
                         </p>
@@ -118,6 +123,7 @@ export function ApprovalTimeline({
                           <p className="text-muted-foreground text-xs break-words">{line.detail}</p>
                         )}
                       </div>
+                      {stepAction?.(step)}
                     </li>
                   );
                 })}

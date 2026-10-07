@@ -1,0 +1,1 @@
+CREATE INDEX "workflows_submitted_idx" ON "workflows" USING btree ("submitted_at","id");

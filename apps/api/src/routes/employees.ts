@@ -7,7 +7,7 @@ import {
   ListQuery,
   paginated,
   PasswordLink,
-  type Permission,
+  Permission,
 } from '@docflow/shared';
 import { and, asc, count, eq, ne, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
@@ -112,7 +112,13 @@ export const employeeRoutes: FastifyPluginAsyncZod<
 
   app.get(
     '/',
-    { schema: { querystring: ListQuery, response: { 200: paginated(Employee) } } },
+    {
+      schema: {
+        // permission narrows the list, e.g. Creators for the dashboard's Created By filter
+        querystring: ListQuery.extend({ permission: Permission.optional() }),
+        response: { 200: paginated(Employee) },
+      },
+    },
     async ({ query }) => {
       const pattern = query.q ? containsPattern(query.q) : undefined;
       const where = and(
@@ -124,6 +130,7 @@ export const employeeRoutes: FastifyPluginAsyncZod<
             )
           : undefined,
         statusCondition(employees.isActive, query.status),
+        query.permission ? eq(roles.permission, query.permission) : undefined,
       );
       const [items, [totals]] = await Promise.all([
         db
@@ -134,7 +141,11 @@ export const employeeRoutes: FastifyPluginAsyncZod<
           .orderBy(asc(sql`lower(${employees.name})`))
           .limit(query.pageSize)
           .offset(pageOffset(query)),
-        db.select({ total: count() }).from(employees).where(where),
+        db
+          .select({ total: count() })
+          .from(employees)
+          .innerJoin(roles, eq(roles.id, employees.roleId))
+          .where(where),
       ]);
       return { items, total: totals?.total ?? 0, page: query.page, pageSize: query.pageSize };
     },

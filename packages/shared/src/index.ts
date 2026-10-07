@@ -5,3 +5,4 @@ export * from './masters.js';
 export * from './ping.js';
 export * from './workflows.js';
 export * from './approvals.js';
+export * from './admin.js';
