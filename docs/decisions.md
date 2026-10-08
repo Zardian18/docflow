@@ -233,3 +233,22 @@ Full findings, the permission matrix and known limitations: `docs/security.md`.
   - **Contents:** 9 people, 3 companies (one with a parallel first step) and 7 documents covering every state, created through the real submit and decide code.
   - **Safety:** it refuses `NODE_ENV=production` and any database that already has employees, so it can't touch the live data.
   - **Sign-in:** every demo account uses the password `demo-password-1`.
+
+### Test-data reset and live demo (owner, 8 Oct 2026)
+- **Who runs it:** Claude runs `reset:data` on the owner's request only, never on its own initiative. It is a CLI, never an app feature (D21).
+- **Before every reset,** a backup run must have just succeeded.
+- **What it deletes:**
+  - every document, with its steps, audit trail, notifications and stored files;
+  - every company;
+  - every custom role;
+  - every employee except the Admins named with `--keep`.
+
+  Only `admin@tridentlifeline.com` survives. Without `--confirm` it is a dry run that only counts.
+- **The audit trail:** it is emptied with `TRUNCATE`, which the append-only trigger (invariant 7) does not block. This wipe is the only sanctioned way audit events are ever removed.
+- **Live demo** (`seed:demo --live`):
+  - **People:** the same people, companies and documents as the development demo, but no demo Admin, so the real Admin manages it.
+  - **Password:** one random password for all demo accounts, printed once. The public `demo-password-1` never exists on the live site.
+  - **Email:** demo notifications are marked skipped, so a future email provider never tries the undeliverable `@demo.docflow.test` addresses.
+- **Plan:**
+  1. Back up, reset, then load the live demo for the owner to try.
+  2. Before go-live, back up and reset again, then enter the real data.
