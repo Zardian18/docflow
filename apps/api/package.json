@@ -15,7 +15,8 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file-if-exists=../../.env src/migrate.ts",
-    "seed:admin": "tsx --env-file-if-exists=../../.env src/seed-admin.ts"
+    "seed:admin": "tsx --env-file-if-exists=../../.env src/seed-admin.ts",
+    "seed:demo": "tsx --env-file-if-exists=../../.env src/seed-demo.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1147.0",

@@ -32,4 +32,39 @@ No critical issue was found, and there was no way to reach another person's docu
 - **Older documents keep their `uploads/…` file key:** only documents submitted before this change are affected. Their upload URLs expired long ago, so they cannot be overwritten now.
 
 ## Endpoint × permission matrix
-The matrix is extended to every endpoint in Phase 7 PR B (tests plus the published table).
+This is enforced by `apps/api/src/permissions.integration.test.ts`:
+- **Callers:** every endpoint is called signed out and as each of the four permissions.
+- **Refusals:** a caller who isn't allowed must get 401 when signed out and 403 when signed in with the wrong permission. An allowed caller must get past the guard (it may still get 400/404/409).
+- **Completeness:** the test also fails if the API serves a route this table doesn't list.
+
+| Endpoint | Signed out | Admin | Creator | Approver | CFO |
+|---|---|---|---|---|---|
+| `GET /healthz`, `GET /v1/ping`, `POST /v1/auth/{login,logout,set-password,forgot-password}` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `GET /v1/auth/me`, `POST /v1/auth/change-password` | 401 | ✅ | ✅ | ✅ | ✅ |
+| `GET /v1/workflows/:id`, `GET /v1/workflows/:id/file` ¹ | 401 | ✅ | ✅ | ✅ | ✅ |
+| Roles, Employees, Companies masters (all methods) | 401 | ✅ | 403 | 403 | 403 |
+| `GET /v1/admin/workflows`, `/stats`, `POST /v1/workflows/:id/steps/:stepId/reassign` | 401 | ✅ | 403 | 403 | 403 |
+| `GET /v1/employees/approver-search`, `GET /v1/companies/search` | 401 | ✅ | ✅ | 403 | 403 |
+| `POST /v1/uploads/presign`, `POST /v1/workflows`, `GET /v1/workflows/mine` | 401 | 403 | ✅ | 403 | 403 |
+| `GET /v1/approvals/pending`, `/history`, `POST /v1/workflows/:id/decision` ² | 401 | 403 | 403 | ✅ | ✅ |
+| `GET /v1/approvals/rejected-before-final` | 401 | 403 | 403 | 403 | ✅ |
+| `POST /internal/tick` | shared secret only | | | | |
+
+¹ After the guard, a document someone may not see answers 404, not 403, so ids reveal nothing. Who may see one: its Creator; Admin (read-only); an approver or the CFO once their step is reached; and the CFO when it was rejected early (D22).
+² Deciding also requires that it is the caller's step right now (409 otherwise).
+
+## Browser tests (`apps/e2e`)
+Playwright drives the production web build, served with its real security headers (CSP included), against the real API. The API uses the local storage driver and a throwaway `docflow_e2e` database, recreated and filled by `seed:demo` on every run.
+- **Covered flows:**
+  - a parallel step, the next position, then CFO completion;
+  - invariant 1 (a later approver can't open the document early, even by URL);
+  - rejection needs a reason;
+  - a rejection ends the chain, and the CFO sees it under "Rejected before final approval" (D22);
+  - the admin dashboard filters and reassign (D9);
+  - viewing the stored PDF inline.
+- **Accessibility:** an axe WCAG 2.1 A/AA scan runs on every screen, for the person who uses it, at 1280 px and 375 px, plus the dialogs.
+- **What the first scan found:**
+  - two text colours a shade under the 4.5:1 contrast minimum;
+  - an `aria-label` on a plain `div` (the loading skeleton).
+
+  All are fixed; see `docs/decisions.md`.

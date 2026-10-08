@@ -29,7 +29,7 @@ export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () =>
 
 export function ListSkeleton({ rows = 4 }: { rows?: number }) {
   return (
-    <div className="divide-y" aria-busy="true" aria-label="Loading">
+    <div className="divide-y" role="status" aria-busy="true" aria-label="Loading">
       {Array.from({ length: rows }, (_, i) => (
         <div key={i} className="flex items-center gap-4 px-4 py-4 md:px-5">
           <Skeleton className="h-4 w-1/4" />

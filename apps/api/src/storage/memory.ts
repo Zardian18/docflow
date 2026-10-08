@@ -50,6 +50,10 @@ export class MemoryStorage implements StorageService {
     return Readable.from([obj.body]);
   }
 
+  async put(key: string, body: Buffer, contentType: string) {
+    this.upload(key, body, contentType);
+  }
+
   async copy(fromKey: string, toKey: string) {
     const obj = this.objects.get(fromKey);
     if (!obj) throw new Error(`no object ${fromKey}`);

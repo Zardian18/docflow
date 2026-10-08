@@ -25,3 +25,9 @@ Thumbs.db
 
 # Neon CLI local link/config state
 .neon/
+
+# Playwright E2E output and local-driver files
+apps/e2e/.storage/
+apps/e2e/.auth/
+apps/e2e/test-results/
+apps/e2e/playwright-report/

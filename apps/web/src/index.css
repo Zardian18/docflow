@@ -64,7 +64,8 @@
   --secondary: #f3f4f6;
   --secondary-foreground: #111827;
   --muted: #f3f4f6;
-  --muted-foreground: #6b7280;
+  /* #6b7280 in Figma; darkened a shade to reach WCAG AA 4.5:1 on muted chips (Phase 7 axe) */
+  --muted-foreground: #646b78;
   --accent: #f3f4f6;
   --accent-foreground: #111827;
   --destructive: #c42b23;
@@ -75,7 +76,8 @@
 
   --status-amber: #b45309;
   --status-amber-bg: #fef3c7;
-  --status-blue: #2f5fe8;
+  /* the primary blue darkened a shade: 4.44:1 on its pill background failed WCAG AA */
+  --status-blue: #2a55d4;
   --status-blue-bg: #e3eafc;
   --status-green: #15803d;
   --status-green-bg: #dcfce7;
