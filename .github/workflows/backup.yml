@@ -1,0 +1,181 @@
+name: Backup
+
+# Nightly encrypted pg_dump of production into the private backups bucket, then a restore
+# drill of that exact uploaded file (row counts must match and the API must boot on it).
+# Procedure and recovery steps: docs/runbook-backup.md
+on:
+  schedule:
+    - cron: '30 20 * * *' # 02:00 IST
+  workflow_dispatch:
+    inputs:
+      weekly:
+        description: 'Also keep this backup as a weekly copy'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup
+  cancel-in-progress: false
+
+env:
+  # Same major as Neon (18.x); pg_dump must not be older than the server
+  PG_IMAGE: postgres:18-bookworm@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c
+  B2_CLI_URL: https://github.com/Backblaze/B2_Command_Line_Tool/releases/download/v5.0.0/b2v5-linux
+  B2_CLI_SHA256: 687c3d14616687f530f819ae614cab71b22dc4810b163f19eca6db0889d0bb42
+  RESTORE_URL: postgres://restore:restore@127.0.0.1:5432/restore
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # Scratch database for the restore drill; never holds anything after the job ends
+    services:
+      postgres:
+        image: postgres:18-bookworm@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c
+        env:
+          POSTGRES_USER: restore
+          POSTGRES_PASSWORD: restore
+          POSTGRES_DB: restore
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U restore"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      SOURCE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+      BUCKET: ${{ secrets.BACKUP_B2_BUCKET }}
+      B2_APPLICATION_KEY_ID: ${{ secrets.BACKUP_B2_KEY_ID }}
+      B2_APPLICATION_KEY: ${{ secrets.BACKUP_B2_APPLICATION_KEY }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check configuration
+        run: |
+          for name in SOURCE_URL BACKUP_PASSPHRASE BUCKET B2_APPLICATION_KEY_ID B2_APPLICATION_KEY; do
+            [ -n "${!name}" ] || { echo "::error::secret for $name is missing"; exit 1; }
+          done
+          [ ${#BACKUP_PASSPHRASE} -ge 30 ] || { echo "::error::BACKUP_PASSPHRASE is shorter than 30 characters"; exit 1; }
+
+      - name: Install the b2 CLI (checksum-verified)
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL -o "$RUNNER_TEMP/bin/b2" "$B2_CLI_URL"
+          echo "$B2_CLI_SHA256  $RUNNER_TEMP/bin/b2" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/bin/b2"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Sign in to Backblaze and check the bucket settings
+        run: |
+          b2 account authorize > /dev/null
+          b2 bucket get "$BUCKET" > bucket.json
+          jq '{isFileLockEnabled, defaultRetention, defaultServerSideEncryption, lifecycleRules}' bucket.json
+          [ "$(jq -r '.isFileLockEnabled' bucket.json)" = "true" ] \
+            || echo "::warning::Object Lock is not enabled on the backups bucket"
+          [ "$(jq -r '.defaultRetention.mode // "none"' bucket.json)" != "none" ] \
+            || echo "::warning::The backups bucket has no default retention, so backups can be deleted"
+          rm bucket.json
+
+      - name: Dump the database
+        run: |
+          stamp=$(date -u +%Y-%m-%dT%H%MZ)
+          echo "NAME=docflow-$stamp.dump.gpg" >> "$GITHUB_ENV"
+          # The URL reaches the container as an environment variable, never on a command line
+          docker run --rm -e SOURCE_URL -v "$PWD:/out" "$PG_IMAGE" sh -c \
+            'pg_dump "$SOURCE_URL" --format=custom --compress=9 --no-owner --no-privileges \
+               --no-publications --no-subscriptions --file=/out/db.dump'
+          sudo chown "$(id -u)" db.dump
+          ls -l db.dump
+
+      - name: Encrypt (AES-256, passphrase)
+        run: |
+          gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 \
+            --symmetric --cipher-algo AES256 --s2k-digest-algo SHA512 --s2k-count 65011712 \
+            --output "$NAME" db.dump 3< <(printf '%s' "$BACKUP_PASSPHRASE")
+          rm db.dump
+
+      - name: Upload
+        run: |
+          b2 file upload --no-progress --content-type application/octet-stream \
+            "$BUCKET" "$NAME" "daily/$NAME" > /dev/null
+          echo "Uploaded daily/$NAME"
+          # Sundays (or on request) also keep a weekly copy, which lives longer
+          if [ "$(date -u +%u)" = 7 ] || [ "${{ inputs.weekly }}" = true ]; then
+            b2 file upload --no-progress --content-type application/octet-stream \
+              "$BUCKET" "$NAME" "weekly/$NAME" > /dev/null
+            echo "Uploaded weekly/$NAME"
+          fi
+          rm "$NAME"
+
+      # The drill uses the copy in the bucket, not the local file, so it proves what a real
+      # recovery would get: download, decrypt with the passphrase, restore
+      - name: 'Restore drill: download, decrypt, restore'
+        run: |
+          b2 file download --no-progress "b2://$BUCKET/daily/$NAME" restored.gpg > /dev/null
+          gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 \
+            --decrypt --output restored.dump restored.gpg 3< <(printf '%s' "$BACKUP_PASSPHRASE")
+          docker run --rm --network host -e RESTORE_URL -v "$PWD:/in" "$PG_IMAGE" sh -c \
+            'pg_restore --exit-on-error --no-owner --no-privileges --dbname="$RESTORE_URL" /in/restored.dump'
+          rm restored.gpg restored.dump
+
+      - name: 'Restore drill: row counts match production'
+        run: |
+          count_rows() {
+            docker run --rm -i --network host -e DB_URL="$1" "$PG_IMAGE" sh -c 'psql "$DB_URL" -XAtq -v ON_ERROR_STOP=1 -f -' <<'SQL'
+          select format('select %L, count(*) from %I.%I', table_schema || '.' || table_name, table_schema, table_name)
+          from information_schema.tables
+          where table_type = 'BASE TABLE' and table_schema not in ('pg_catalog', 'information_schema')
+          order by 1
+          \gexec
+          SQL
+          }
+          count_rows "$SOURCE_URL" > source.txt
+          count_rows "$RESTORE_URL" > restored.txt
+          # Table names and counts only, never row contents
+          column -t -s '|' restored.txt
+          diff source.txt restored.txt || {
+            echo "::error::Row counts differ (a write during the dump can cause this; re-run once)"
+            exit 1
+          }
+          [ "$(grep -c . restored.txt)" -gt 5 ] || { echo "::error::The restore has almost no tables"; exit 1; }
+
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+        with:
+          runtime: node@24
+          cache: true
+          install: false
+
+      - name: 'Restore drill: migrations and the API run on the restored copy'
+        env:
+          DATABASE_URL: ${{ env.RESTORE_URL }}
+          NODE_ENV: development
+          WEB_ORIGIN: http://localhost:5173
+          STORAGE_DRIVER: local
+          LOG_LEVEL: warn
+        run: |
+          pnpm install --frozen-lockfile --filter @docflow/api...
+          pnpm --filter @docflow/shared run build
+          pnpm --filter @docflow/api run build
+          export LOCAL_STORAGE_DIR="$RUNNER_TEMP/files"
+          export TICK_SHARED_SECRET="$(openssl rand -hex 32)"
+          cd apps/api
+          # Nothing pending means the restored schema is exactly what production runs
+          node dist/migrate.js
+          node dist/server.js &
+          api=$!
+          for _ in $(seq 30); do curl -fs http://127.0.0.1:3000/healthz > /dev/null && break; sleep 1; done
+          # A failed sign-in reads the employees table, so 401 proves the API queries the copy
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3000/v1/auth/login \
+            -H 'content-type: application/json' -H 'origin: http://localhost:5173' \
+            -d '{"email":"restore-drill@invalid.test","password":"not-the-password"}')
+          kill "$api"
+          [ "$code" = 401 ] || { echo "::error::Sign-in check returned $code, expected 401"; exit 1; }
+          echo "API booted on the restored copy and answered sign-in with 401"
