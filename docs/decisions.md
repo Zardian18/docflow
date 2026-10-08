@@ -128,7 +128,7 @@ So "as many as possible for free" resolves to **file storage as the real ceiling
   - Build Filters: `apps/api/**`, `packages/shared/**`, `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`
   - Health check: `/healthz`
 - **Migrations run on container start** (`node dist/migrate.js && node dist/server.js`) over `DATABASE_URL_DIRECT`, guarded by a Postgres advisory lock. The free tier has no Pre-Deploy Command.
-- **No GitHub deploy workflows.** Both hosts deploy from their own git integrations on push to `main`, and GitHub Actions runs CI only (`.github/workflows/ci.yml`). Nightly backup (`backup.yml`) is still planned for Phase 7.
+- **No GitHub deploy workflows.** Both hosts deploy from their own git integrations on push to `main`, and GitHub Actions runs CI only (`.github/workflows/ci.yml`). Nightly backup (`backup.yml`) was added in Phase 7; see below.
 - **Live URLs (5 Oct 2026):** web `https://docflow.harddik2002.workers.dev`, API `https://docflow-xayj.onrender.com`. Render suffixes subdomains that are already taken: `docflow.onrender.com` belongs to another account, so always copy the URL from the dashboard. Changing a Cloudflare build variable does not trigger a rebuild; push a commit or use "Retry build".
 - **One environment, no staging yet.** plan.md §6 assumed staging plus a production approval gate. Add a separate Neon branch and Render service for staging before real data goes in (Phase 7/8).
 - **Neon:** Singapore region (Render and Cloudflare regions are the owner's choice). The pooled string serves runtime queries and the direct string serves migrations.
@@ -233,6 +233,14 @@ Full findings, the permission matrix and known limitations: `docs/security.md`.
   - **Contents:** 9 people, 3 companies (one with a parallel first step) and 7 documents covering every state, created through the real submit and decide code.
   - **Safety:** it refuses `NODE_ENV=production` and any database that already has employees, so it can't touch the live data.
   - **Sign-in:** every demo account uses the password `demo-password-1`.
+
+### Phase 7 backups (8 Oct 2026)
+How to restore: `docs/runbook-backup.md`.
+- **Schedule:** nightly at 02:00 IST from GitHub Actions, plus a manual "Run workflow" button.
+- **Method:** `pg_dump` with the Postgres 18 client (Neon runs 18.6), encrypted with GnuPG AES-256 using a passphrase only the owner holds, then uploaded to a separate private B2 bucket with the b2 CLI (pinned binary, checksum-verified).
+- **Retention:** 14 daily and 8 weekly backups (lifecycle rules on `daily/` and `weekly/`). The owner enabled Object Lock in **compliance** mode for 14 days, so not even the account can delete a recent backup.
+- **Every run is a restore drill:** it downloads the uploaded file, decrypts it, restores it into an empty Postgres 18, compares row counts per table, runs migrations and boots the API on the copy. The repository is public, so the log shows table names only, never counts.
+- **Not covered:** the PDF files in `docflow-files` (open item for Phase 8).
 
 ### Test-data reset and live demo (owner, 8 Oct 2026)
 - **Who runs it:** Claude runs `reset:data` on the owner's request only, never on its own initiative. It is a CLI, never an app feature (D21).

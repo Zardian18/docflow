@@ -46,6 +46,7 @@ pnpm 12 via corepack (`corepack enable`, or `corepack pnpm …` if the shims can
 | Demo data on the live site, right after a reset (no demo Admin; prints a random password once) | `pnpm --filter @docflow/api seed:demo --live` |
 | Test-data wipe (D21): **only on the owner's request, after a fresh backup run** | `pnpm --filter @docflow/api reset:data --keep <admin email>` (dry run), then add `--confirm` |
 | Browser + accessibility tests (starts its own API and web build; needs Postgres) | `E2E_DATABASE_URL=postgres://…/docflow_e2e pnpm --filter @docflow/e2e e2e` (first time: `pnpm --filter @docflow/e2e exec playwright install chromium`) |
+| Run a backup now (nightly otherwise; restore steps in `docs/runbook-backup.md`) | GitHub → Actions → **Backup** → Run workflow, or `gh workflow run backup.yml` |
 | Create the first Admin (prints a one-time set-password link) | `pnpm --filter @docflow/api seed:admin --email <email> --name "<name>"` (needs `DATABASE_URL_DIRECT` and `WEB_ORIGIN` in `.env`) |
 
 UI design reference: `docs/design/*.png` (the 9 Figma screens). Design tokens live in `apps/web/src/index.css`; reuse `PageHeader`, `ResponsiveTable`, `StatusPill` and `forms.tsx` for new screens, and check new pages at 375/768/1280/1440px with no clipping.
