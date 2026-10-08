@@ -241,3 +241,22 @@ How to restore: `docs/runbook-backup.md`.
 - **Retention:** 14 daily and 8 weekly backups (lifecycle rules on `daily/` and `weekly/`). The owner enabled Object Lock in **compliance** mode for 14 days, so not even the account can delete a recent backup.
 - **Every run is a restore drill:** it downloads the uploaded file, decrypts it, restores it into an empty Postgres 18, compares row counts per table, runs migrations and boots the API on the copy. The repository is public, so the log shows table names only, never counts.
 - **Not covered:** the PDF files in `docflow-files` (open item for Phase 8).
+
+### Test-data reset and live demo (owner, 8 Oct 2026)
+- **Who runs it:** Claude runs `reset:data` on the owner's request only, never on its own initiative. It is a CLI, never an app feature (D21).
+- **Before every reset,** a backup run must have just succeeded.
+- **What it deletes:**
+  - every document, with its steps, audit trail, notifications and stored files;
+  - every company;
+  - every custom role;
+  - every employee except the Admins named with `--keep`.
+
+  Only `admin@tridentlifeline.com` survives. Without `--confirm` it is a dry run that only counts.
+- **The audit trail:** it is emptied with `TRUNCATE`, which the append-only trigger (invariant 7) does not block. This wipe is the only sanctioned way audit events are ever removed.
+- **Live demo** (`seed:demo --live`):
+  - **People:** the same people, companies and documents as the development demo, but no demo Admin, so the real Admin manages it.
+  - **Password:** one random password for all demo accounts, printed once. The public `demo-password-1` never exists on the live site.
+  - **Email:** demo notifications are marked skipped, so a future email provider never tries the undeliverable `@demo.docflow.test` addresses.
+- **Plan:**
+  1. Back up, reset, then load the live demo for the owner to try.
+  2. Before go-live, back up and reset again, then enter the real data.

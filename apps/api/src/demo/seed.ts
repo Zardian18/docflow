@@ -1,14 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import type { Permission } from '@docflow/shared';
-import { and, count, eq } from 'drizzle-orm';
+import { and, count, eq, isNotNull, sql } from 'drizzle-orm';
 import { hashPassword } from '../auth/crypto.js';
 import type { Db } from '../db/client.js';
-import { companies, companyDefaultApprovers, employees, roles, uploads } from '../db/schema.js';
+import {
+  companies,
+  companyDefaultApprovers,
+  employees,
+  notificationOutbox,
+  roles,
+  uploads,
+  workflows,
+} from '../db/schema.js';
 import { decide } from '../domain/decide.js';
 import { submitWorkflow } from '../domain/submit.js';
 import type { StorageService } from '../storage/storage.js';
 
-/** Every demo account signs in with this password. Development, CI and staging only. */
+/** The demo password for development and CI. The live site gets a random one (`--live`). */
 export const DEMO_PASSWORD = 'demo-password-1';
 export const DEMO_DOMAIN = 'demo.docflow.test';
 
@@ -56,13 +64,40 @@ type Step = [who: string, decision: 'APPROVE' | 'REJECT', remarks?: string];
  * Loads a realistic demo data set through the real submit and decide code, so every state is
  * one the app can actually reach: pending at each position, a part-approved parallel step,
  * waiting for the CFO, completed, rejected early (D22) and rejected by the CFO.
- * Only ever runs on a database with no employees (it refuses otherwise).
+ *
+ * By default it adds a demo Admin and needs a database with no employees. With
+ * `withAdmin: false` (the live site, after `reset:data`) the existing Admins stay in charge,
+ * and the only employees allowed beforehand are active Admins.
  */
-export async function seedDemo(db: Db, storage: StorageService) {
-  const [{ n } = { n: 0 }] = await db.select({ n: count() }).from(employees);
-  if (n > 0) {
-    throw new Error('seed:demo only runs on an empty database (it found existing employees)');
+export async function seedDemo(
+  db: Db,
+  storage: StorageService,
+  { password = DEMO_PASSWORD, withAdmin = true }: { password?: string; withAdmin?: boolean } = {},
+) {
+  const [{ others } = { others: 0 }] = await db
+    .select({ others: count() })
+    .from(employees)
+    .innerJoin(roles, eq(roles.id, employees.roleId))
+    .where(
+      withAdmin ? undefined : sql`not (${employees.isActive} and ${roles.permission} = 'ADMIN')`,
+    );
+  const [{ docs } = { docs: 0 }] = await db.select({ docs: count() }).from(workflows);
+  const [{ firms } = { firms: 0 }] = await db.select({ firms: count() }).from(companies);
+  if (others + docs + firms > 0) {
+    throw new Error(
+      withAdmin
+        ? 'seed:demo only runs on an empty database (it found existing data)'
+        : 'seed:demo --live only runs right after reset:data (it found existing data)',
+    );
   }
+  const takenCodes = new Set(
+    (
+      await db
+        .select({ code: employees.employeeCode })
+        .from(employees)
+        .where(isNotNull(employees.employeeCode))
+    ).map((r) => r.code),
+  );
 
   const roleIds = new Map<Permission, string>();
   for (const r of await db
@@ -71,16 +106,16 @@ export async function seedDemo(db: Db, storage: StorageService) {
     .where(eq(roles.isSystem, true))) {
     roleIds.set(r.permission, r.id);
   }
-  const passwordHash = await hashPassword(DEMO_PASSWORD);
+  const passwordHash = await hashPassword(password);
   const ids: Record<string, string> = {};
   const names: Record<string, string> = {};
-  for (const p of PEOPLE) {
+  for (const p of PEOPLE.filter((p) => withAdmin || p.permission !== 'ADMIN')) {
     const [row] = await db
       .insert(employees)
       .values({
         name: p.name,
         email: demoEmail(p.key),
-        employeeCode: p.code,
+        employeeCode: takenCodes.has(p.code) ? null : p.code,
         roleId: roleIds.get(p.permission)!,
         passwordHash,
         isCfo: p.permission === 'CFO',
@@ -261,6 +296,12 @@ export async function seedDemo(db: Db, storage: StorageService) {
     }
     workflowIds.push(id);
   }
+
+  // Demo addresses can't receive mail: never let a future email provider try them
+  await db
+    .update(notificationOutbox)
+    .set({ status: 'skipped' })
+    .where(eq(notificationOutbox.status, 'pending'));
 
   const [{ active } = { active: 0 }] = await db
     .select({ active: count() })

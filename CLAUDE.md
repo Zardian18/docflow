@@ -43,6 +43,8 @@ pnpm 12 via corepack (`corepack enable`, or `corepack pnpm …` if the shims can
 | Regenerate Worker types after editing a `wrangler.jsonc` | `pnpm --filter @docflow/cron-worker types` |
 | Local Postgres (needs Docker) | `docker compose up -d` |
 | Demo data into an EMPTY database (refuses production and non-empty DBs) | `pnpm --filter @docflow/api seed:demo` (accounts `<name>@demo.docflow.test`, password `demo-password-1`) |
+| Demo data on the live site, right after a reset (no demo Admin; prints a random password once) | `pnpm --filter @docflow/api seed:demo --live` |
+| Test-data wipe (D21): **only on the owner's request, after a fresh backup run** | `pnpm --filter @docflow/api reset:data --keep <admin email>` (dry run), then add `--confirm` |
 | Browser + accessibility tests (starts its own API and web build; needs Postgres) | `E2E_DATABASE_URL=postgres://…/docflow_e2e pnpm --filter @docflow/e2e e2e` (first time: `pnpm --filter @docflow/e2e exec playwright install chromium`) |
 | Run a backup now (nightly otherwise; restore steps in `docs/runbook-backup.md`) | GitHub → Actions → **Backup** → Run workflow, or `gh workflow run backup.yml` |
 | Create the first Admin (prints a one-time set-password link) | `pnpm --filter @docflow/api seed:admin --email <email> --name "<name>"` (needs `DATABASE_URL_DIRECT` and `WEB_ORIGIN` in `.env`) |
