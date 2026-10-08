@@ -42,11 +42,13 @@ pnpm 12 via corepack (`corepack enable`, or `corepack pnpm …` if the shims can
 | Cron worker locally | `pnpm --filter @docflow/cron-worker dev`, then `curl http://localhost:8787/cdn-cgi/local/scheduled` |
 | Regenerate Worker types after editing a `wrangler.jsonc` | `pnpm --filter @docflow/cron-worker types` |
 | Local Postgres (needs Docker) | `docker compose up -d` |
+| Demo data into an EMPTY database (refuses production and non-empty DBs) | `pnpm --filter @docflow/api seed:demo` (accounts `<name>@demo.docflow.test`, password `demo-password-1`) |
+| Browser + accessibility tests (starts its own API and web build; needs Postgres) | `E2E_DATABASE_URL=postgres://…/docflow_e2e pnpm --filter @docflow/e2e e2e` (first time: `pnpm --filter @docflow/e2e exec playwright install chromium`) |
 | Create the first Admin (prints a one-time set-password link) | `pnpm --filter @docflow/api seed:admin --email <email> --name "<name>"` (needs `DATABASE_URL_DIRECT` and `WEB_ORIGIN` in `.env`) |
 
 UI design reference: `docs/design/*.png` (the 9 Figma screens). Design tokens live in `apps/web/src/index.css`; reuse `PageHeader`, `ResponsiveTable`, `StatusPill` and `forms.tsx` for new screens, and check new pages at 375/768/1280/1440px with no clipping.
 
-Files: `apps/api/src/storage/` (`StorageService`; B2 in production, `MemoryStorage` in tests). Presigned PUTs sign content-type and content-length, so B2 itself refuses a different type or size. The S3 client must keep `requestChecksumCalculation`/`responseChecksumValidation` at `WHEN_REQUIRED`, because the SDK defaults break browser uploads to B2. The bucket CORS rule (B2 operation names `s3_put`/`s3_get`/`s3_head`) allows the web origin and `http://localhost:5173`.
+Files: `apps/api/src/storage/` (`StorageService`; B2 in production, `MemoryStorage` in unit tests, and `STORAGE_DRIVER=local` (disk, dev/CI only, refused in production) for E2E). Presigned PUTs sign content-type and content-length, so B2 itself refuses a different type or size. The S3 client must keep `requestChecksumCalculation`/`responseChecksumValidation` at `WHEN_REQUIRED`, because the SDK defaults break browser uploads to B2. The bucket CORS rule (B2 operation names `s3_put`/`s3_get`/`s3_head`) allows the web origin and `http://localhost:5173`.
 
 Measured Render cold start: ~23–33 s for the first request after the service sleeps; warm ~0.2–0.5 s. The cron tick runs every 30 min so it does not act as a keep-alive (D15).
 

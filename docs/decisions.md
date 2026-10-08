@@ -221,3 +221,15 @@ Full findings, the permission matrix and known limitations: `docs/security.md`.
   - The Docker base image is pinned by digest and CI actions by commit SHA.
   - CI runs `pnpm audit --audit-level high`.
   - One unpatched dev-only advisory, braces via the shadcn CLI, is ignored with its reason in `pnpm-workspace.yaml`.
+
+### Phase 7 tests and accessibility (8 Oct 2026)
+- **Two colours darkened a shade for WCAG AA**, the only deviation from the Figma palette. The axe scan measured both just under the 4.5:1 minimum for small text:
+  - muted text `#6b7280` → `#646b78` (4.39:1 → 4.87:1 on grey chips);
+  - status-pill blue `#2f5fe8` → `#2a55d4` (4.44:1 → 5.2:1 on its pale blue background).
+
+  The primary button colour is unchanged.
+- **Local storage driver** (`STORAGE_DRIVER=local`): development and CI only, and refused when `NODE_ENV=production`. The API stores files on disk and serves them through signed, expiring URLs with the same exact-type and exact-size rule as B2. It exists so browser tests need no B2. Production still never passes file bytes through the API.
+- **Demo data** (`seed:demo`):
+  - **Contents:** 9 people, 3 companies (one with a parallel first step) and 7 documents covering every state, created through the real submit and decide code.
+  - **Safety:** it refuses `NODE_ENV=production` and any database that already has employees, so it can't touch the live data.
+  - **Sign-in:** every demo account uses the password `demo-password-1`.
