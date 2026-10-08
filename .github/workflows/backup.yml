@@ -139,12 +139,14 @@ jobs:
           }
           count_rows "$SOURCE_URL" > source.txt
           count_rows "$RESTORE_URL" > restored.txt
-          # Table names and counts only, never row contents
-          column -t -s '|' restored.txt
-          diff source.txt restored.txt || {
+          # The repo is public, so its logs are too: report table names only, never counts
+          if ! cmp -s source.txt restored.txt; then
+            echo "Tables whose row counts differ:"
+            diff source.txt restored.txt | grep '^[<>]' | cut -c3- | cut -d'|' -f1 | sort -u
             echo "::error::Row counts differ (a write during the dump can cause this; re-run once)"
             exit 1
-          }
+          fi
+          echo "All $(grep -c . restored.txt) tables have the same row counts as production"
           [ "$(grep -c . restored.txt)" -gt 5 ] || { echo "::error::The restore has almost no tables"; exit 1; }
 
       - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
