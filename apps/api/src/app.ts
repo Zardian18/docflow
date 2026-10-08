@@ -1,4 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import os from 'node:os';
+import path from 'node:path';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
@@ -31,6 +33,7 @@ import { approvalRoutes } from './routes/approvals.js';
 import { runMaintenance } from './maintenance.js';
 import type { EmailProvider } from './notify/outbox.js';
 import { createB2Storage } from './storage/b2.js';
+import { createLocalStorage, LOCAL_STORAGE_PATH } from './storage/local.js';
 import type { StorageService } from './storage/storage.js';
 
 export interface AppDeps {
@@ -43,8 +46,19 @@ export interface AppDeps {
   email?: EmailProvider | null;
 }
 
+/** The development/CI disk driver when STORAGE_DRIVER=local (refused in production by env.ts). */
+export function localStorageFromEnv(env: Env) {
+  if (env.STORAGE_DRIVER !== 'local') return null;
+  return createLocalStorage({
+    dir: env.LOCAL_STORAGE_DIR ?? path.join(os.tmpdir(), 'docflow-storage'),
+    publicUrl: env.API_PUBLIC_URL ?? `http://localhost:${env.PORT}`,
+    // A key of its own, derived so there's no extra secret to configure in dev/CI
+    secret: createHash('sha256').update(`local-storage|${env.TICK_SHARED_SECRET}`).digest('hex'),
+  });
+}
+
 /** Real storage when configured; otherwise every file operation fails with a clear 503. */
-function storageFromEnv(env: Env): StorageService {
+export function storageFromEnv(env: Env): StorageService {
   const { B2_ENDPOINT, B2_REGION, B2_KEY_ID, B2_APPLICATION_KEY, B2_BUCKET } = env;
   if (B2_ENDPOINT && B2_REGION && B2_KEY_ID && B2_APPLICATION_KEY && B2_BUCKET) {
     return createB2Storage({
@@ -68,6 +82,7 @@ function storageFromEnv(env: Env): StorageService {
     head: unavailable,
     readRange: unavailable,
     stream: unavailable,
+    put: unavailable,
     copy: unavailable,
     delete: unavailable,
   };
@@ -90,7 +105,8 @@ export async function buildApp({
   limits: limitOverrides,
   storage: storageOverride,
 }: AppDeps) {
-  const storage = storageOverride ?? storageFromEnv(env);
+  const local = storageOverride ? null : localStorageFromEnv(env);
+  const storage = storageOverride ?? local?.storage ?? storageFromEnv(env);
   const limits: Limits = { ...DEFAULT_LIMITS, ...limitOverrides };
 
   const app = Fastify({
@@ -172,7 +188,8 @@ export async function buildApp({
   await app.register(rateLimit, { global: false, hook: 'preHandler' });
   await app.register(csrfPlugin, {
     webOrigin: env.WEB_ORIGIN,
-    exemptPaths: [TICK_PATH],
+    // Local-storage URLs are authorised by their signature, like B2's presigned URLs
+    exemptPaths: local ? [TICK_PATH, LOCAL_STORAGE_PATH] : [TICK_PATH],
   });
   await app.register(authPlugin, { db });
 
@@ -198,6 +215,11 @@ export async function buildApp({
       roleCount: row.role_count,
     };
   });
+
+  if (local) {
+    app.log.warn('STORAGE_DRIVER=local: files are stored on this machine (development/CI only)');
+    await app.register(local.routes);
+  }
 
   const deps = { db, env, limits };
   await app.register(authRoutes, { ...deps, prefix: '/v1/auth' });

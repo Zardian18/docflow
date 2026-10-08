@@ -91,6 +91,12 @@ export function createB2Storage(config: B2Config): StorageService {
       return res.Body as Readable;
     },
 
+    async put(key, body, contentType) {
+      await s3.send(
+        new PutObjectCommand({ Bucket, Key: key, Body: body, ContentType: contentType }),
+      );
+    },
+
     async copy(fromKey, toKey) {
       await s3.send(
         new CopyObjectCommand({

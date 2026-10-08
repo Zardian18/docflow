@@ -32,6 +32,13 @@ describe('loadEnv', () => {
     expect(loadEnv({ ...valid, NODE_ENV: 'development' }).B2_BUCKET).toBeUndefined();
   });
 
+  it('refuses the local storage driver in production', () => {
+    expect(() => loadEnv({ ...valid, NODE_ENV: 'production', STORAGE_DRIVER: 'local' })).toThrow(
+      /STORAGE_DRIVER: local storage is for development and CI only/,
+    );
+    expect(loadEnv({ ...valid, STORAGE_DRIVER: 'local' }).STORAGE_DRIVER).toBe('local');
+  });
+
   it('normalises WEB_ORIGIN to a bare origin', () => {
     expect(
       loadEnv({ ...valid, WEB_ORIGIN: 'https://docflow.example.workers.dev/' }).WEB_ORIGIN,

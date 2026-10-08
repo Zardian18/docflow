@@ -41,6 +41,13 @@ const EnvSchema = z
     // Set by Render on every deploy; reported by /healthz so a deploy can be verified
     RENDER_GIT_COMMIT: z.string().optional(),
 
+    // b2 everywhere real; local (files on disk, served by the API) only for development and
+    // CI end-to-end tests, and refused in production
+    STORAGE_DRIVER: z.enum(['b2', 'local']).default('b2'),
+    LOCAL_STORAGE_DIR: z.string().optional(),
+    // Where browsers reach this API, for local-storage URLs (default http://localhost:PORT)
+    API_PUBLIC_URL: z.url().optional(),
+
     // Backblaze B2 (S3-compatible). Required in production; tests inject in-memory storage.
     B2_ENDPOINT: z.url().optional(),
     B2_REGION: z.string().optional(),
@@ -53,6 +60,13 @@ const EnvSchema = z
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'production') return;
+    if (env.STORAGE_DRIVER === 'local') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['STORAGE_DRIVER'],
+        message: 'local storage is for development and CI only',
+      });
+    }
     for (const key of B2_KEYS) {
       if (!env[key])
         ctx.addIssue({ code: 'custom', path: [key], message: 'Required in production' });
