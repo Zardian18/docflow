@@ -57,6 +57,13 @@
       "when": 1791369264391,
       "tag": "0007_dashboard_sort_index",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791802881300,
+      "tag": "0008_multiple_roles",
+      "breakpoints": true
     }
   ]
 }

@@ -63,12 +63,17 @@ export const MATRIX: Array<[Method, string, Access]> = [
 const OUTSIDE_MATRIX = ['POST /internal/tick'];
 
 const PERMISSIONS: Permission[] = ['ADMIN', 'CREATOR', 'APPROVER', 'CFO'];
+// Someone holding both a Creator and an Approver role (D23) may do what either may
+const DUAL = 'CREATOR+APPROVER';
+type Who = Permission | typeof DUAL;
+const WHO: Who[] = [...PERMISSIONS, DUAL];
+const permissionsOf = (who: Who): Permission[] => (who === DUAL ? ['CREATOR', 'APPROVER'] : [who]);
 
 describe.skipIf(!TEST_DB_URL)('endpoint × permission matrix', () => {
   let db: Db;
   let end: () => Promise<void>;
   let app: Awaited<ReturnType<typeof testApp>>;
-  const clients = new Map<Permission | 'anon', Client>();
+  const clients = new Map<Who | 'anon', Client>();
 
   beforeAll(async () => {
     const setup = await setupTestDb();
@@ -77,10 +82,10 @@ describe.skipIf(!TEST_DB_URL)('endpoint × permission matrix', () => {
     app = await testApp(db);
     await resetDb(db);
     clients.set('anon', new Client(app));
-    for (const permission of PERMISSIONS) {
-      const email = `${permission.toLowerCase()}@matrix.test`;
-      await createEmployee(db, { name: `${permission} user`, email, permission });
-      clients.set(permission, await new Client(app).login(email));
+    for (const who of WHO) {
+      const email = `${who.toLowerCase().replace('+', '-')}@matrix.test`;
+      await createEmployee(db, { name: `${who} user`, email, permission: permissionsOf(who) });
+      clients.set(who, await new Client(app).login(email));
     }
   });
   afterAll(async () => {
@@ -88,7 +93,7 @@ describe.skipIf(!TEST_DB_URL)('endpoint × permission matrix', () => {
     await end();
   });
 
-  const call = (who: Permission | 'anon', method: Method, url: string) =>
+  const call = (who: Who | 'anon', method: Method, url: string) =>
     clients
       .get(who)!
       .request(method, url, method === 'GET' || method === 'DELETE' ? undefined : {});
@@ -121,13 +126,13 @@ describe.skipIf(!TEST_DB_URL)('endpoint × permission matrix', () => {
     if (access === 'public') return; // reachable by anyone by design
     const anon = await call('anon', method, url);
     expect(anon.statusCode, 'signed out').toBe(401);
-    for (const permission of PERMISSIONS) {
-      const res = await call(permission, method, url);
-      const allowed = access === 'signed-in' || access.includes(permission);
+    for (const who of WHO) {
+      const res = await call(who, method, url);
+      const allowed = access === 'signed-in' || permissionsOf(who).some((p) => access.includes(p));
       if (allowed) {
-        expect([401, 403], `${permission} should get past the guard`).not.toContain(res.statusCode);
+        expect([401, 403], `${who} should get past the guard`).not.toContain(res.statusCode);
       } else {
-        expect(res.statusCode, `${permission} should be refused`).toBe(403);
+        expect(res.statusCode, `${who} should be refused`).toBe(403);
       }
     }
   });

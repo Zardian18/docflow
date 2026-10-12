@@ -67,8 +67,8 @@ async function visibleWorkflow(db: Db, user: AuthUser, id: string) {
     .from(workflows)
     .where(eq(workflows.id, id));
   if (!row) throw notFound('Document');
-  if (user.permission === 'ADMIN' || row.createdBy === user.id) return row;
-  if (user.permission === 'APPROVER' || user.permission === 'CFO') {
+  if (user.permissions.includes('ADMIN') || row.createdBy === user.id) return row;
+  if (user.permissions.includes('APPROVER') || user.permissions.includes('CFO')) {
     const [step] = await db
       .select({
         position: workflowSteps.position,

@@ -5,12 +5,12 @@ import {
   CompanyOption,
   CompanySearchQuery,
 } from '@docflow/shared';
-import { and, asc, eq, or, sql } from 'drizzle-orm';
+import { and, asc, eq, ne, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { companies, employees, roles } from '../db/schema.js';
+import { companies, employeeRoles, employees, roles } from '../db/schema.js';
 import { activeCfo, defaultApproversFor } from '../domain/chain.js';
-import { requirePermission } from '../plugins/auth.js';
+import { currentUser, requirePermission } from '../plugins/auth.js';
 import type { RouteDeps } from './deps.js';
 import { prefixPattern } from './query-helpers.js';
 
@@ -18,12 +18,13 @@ import { prefixPattern } from './query-helpers.js';
 export const lookupRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db }) => {
   app.addHook('onRequest', requirePermission('ADMIN', 'CREATOR'));
 
-  // Approver picker: only active employees whose (active) role is APPROVER (D3, invariant 11).
-  // Matches the start of the name, case-insensitively (URS §5.2).
+  // Approver picker: only active employees holding an active APPROVER role (D3, invariant 11),
+  // never the person searching: someone who is both Creator and Approver can't approve their
+  // own document (D23). Matches the start of the name, case-insensitively (URS §5.2).
   app.get(
     '/v1/employees/approver-search',
     { schema: { querystring: ApproverSearchQuery, response: { 200: ApproverOption.array() } } },
-    async ({ query }) =>
+    async (request) =>
       db
         .select({
           id: employees.id,
@@ -32,13 +33,19 @@ export const lookupRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db }
           roleName: roles.name,
         })
         .from(employees)
-        .innerJoin(roles, eq(roles.id, employees.roleId))
+        .innerJoin(
+          employeeRoles,
+          and(eq(employeeRoles.employeeId, employees.id), eq(employeeRoles.permission, 'APPROVER')),
+        )
+        .innerJoin(roles, eq(roles.id, employeeRoles.roleId))
         .where(
           and(
             eq(employees.isActive, true),
             eq(roles.isActive, true),
-            eq(roles.permission, 'APPROVER'),
-            query.q ? sql`lower(${employees.name}) like ${prefixPattern(query.q)}` : undefined,
+            ne(employees.id, currentUser(request).id),
+            request.query.q
+              ? sql`lower(${employees.name}) like ${prefixPattern(request.query.q)}`
+              : undefined,
           ),
         )
         .orderBy(asc(sql`lower(${employees.name})`))

@@ -12,14 +12,31 @@ import type { FastifyRequest } from 'fastify';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { getDummyHash, hashPassword, verifyPassword } from '../auth/crypto.js';
 import { consumePasswordToken } from '../auth/password-links.js';
-import { createSession, revokeEmployeeSessions, revokeSession } from '../auth/sessions.js';
-import { employees, roles } from '../db/schema.js';
+import {
+  createSession,
+  revokeEmployeeSessions,
+  revokeSession,
+  withRoles,
+  type AuthUser,
+} from '../auth/sessions.js';
+import { employees } from '../db/schema.js';
+import { heldRoles } from '../domain/roles.js';
 import { perUserLimit, type RouteDeps } from './deps.js';
 import { AppError, badRequest } from '../errors.js';
 import { currentUser, requireUser, SESSION_COOKIE } from '../plugins/auth.js';
 
 const invalidCredentials = () =>
   new AppError(401, 'INVALID_CREDENTIALS', 'Email or password is incorrect');
+
+const toMe = (user: Omit<AuthUser, 'sessionId'>) => ({
+  id: user.id,
+  name: user.name,
+  email: user.email,
+  employeeCode: user.employeeCode,
+  roleName: user.roleName,
+  permission: user.permission,
+  permissions: user.permissions,
+});
 
 export const authRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db, env, limits }) => {
   const cookieOptions = {
@@ -74,17 +91,20 @@ export const authRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db, en
           email: employees.email,
           employeeCode: employees.employeeCode,
           passwordHash: employees.passwordHash,
-          roleName: roles.name,
-          permission: roles.permission,
+          roles: heldRoles({ activeOnly: true }),
         })
         .from(employees)
-        .innerJoin(roles, eq(roles.id, employees.roleId))
-        .where(
-          and(eq(employees.email, email), eq(employees.isActive, true), eq(roles.isActive, true)),
-        )
+        .where(and(eq(employees.email, email), eq(employees.isActive, true)))
         .limit(1);
+      // No active role means no access, exactly like an unknown email
+      const user = row
+        ? withRoles(
+            { id: row.id, name: row.name, email: row.email, employeeCode: row.employeeCode },
+            row.roles,
+          )
+        : null;
 
-      if (!row?.passwordHash) {
+      if (!user || !row?.passwordHash) {
         await verifyPassword(await getDummyHash(), password);
         throw invalidCredentials();
       }
@@ -93,21 +113,14 @@ export const authRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db, en
       const { token, expiresAt } = await db.transaction(async (tx) => {
         // Signing in over an existing session (another account, or the same one) ends it
         if (request.user) await revokeSession(tx, request.user.sessionId);
-        return createSession(tx, row.id, env.SESSION_TTL_HOURS, {
+        return createSession(tx, user.id, env.SESSION_TTL_HOURS, {
           ip: request.ip,
           userAgent: request.headers['user-agent'],
         });
       });
       reply.setCookie(SESSION_COOKIE, token, { ...cookieOptions, expires: expiresAt });
-      request.log.info({ employeeId: row.id }, 'login');
-      return {
-        id: row.id,
-        name: row.name,
-        email: row.email,
-        employeeCode: row.employeeCode,
-        roleName: row.roleName,
-        permission: row.permission,
-      };
+      request.log.info({ employeeId: user.id }, 'login');
+      return toMe(user);
     },
   );
 
@@ -121,15 +134,7 @@ export const authRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db, en
     '/me',
     { preHandler: requireUser, schema: { response: { 200: Me } } },
     async (request) => {
-      const user = currentUser(request);
-      return {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        employeeCode: user.employeeCode,
-        roleName: user.roleName,
-        permission: user.permission,
-      };
+      return toMe(currentUser(request));
     },
   );
 

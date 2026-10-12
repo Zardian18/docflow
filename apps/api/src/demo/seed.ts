@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Permission } from '@docflow/shared';
-import { and, count, eq, isNotNull, sql } from 'drizzle-orm';
+import { and, count, eq, isNotNull, not } from 'drizzle-orm';
 import { hashPassword } from '../auth/crypto.js';
 import type { Db } from '../db/client.js';
 import {
@@ -13,6 +13,7 @@ import {
   workflows,
 } from '../db/schema.js';
 import { decide } from '../domain/decide.js';
+import { holdsPermission, setRoles } from '../domain/roles.js';
 import { submitWorkflow } from '../domain/submit.js';
 import type { StorageService } from '../storage/storage.js';
 
@@ -20,16 +21,18 @@ import type { StorageService } from '../storage/storage.js';
 export const DEMO_PASSWORD = 'demo-password-1';
 export const DEMO_DOMAIN = 'demo.docflow.test';
 
-const PEOPLE: Array<{ key: string; name: string; permission: Permission; code: string }> = [
-  { key: 'admin', name: 'Anita Mehta', permission: 'ADMIN', code: 'EMP-0001' },
-  { key: 'cfo', name: 'Vikram Malhotra', permission: 'CFO', code: 'EMP-0002' },
-  { key: 'rahul', name: 'Rahul Mehra', permission: 'CREATOR', code: 'EMP-0101' },
-  { key: 'sara', name: 'Sara Khan', permission: 'CREATOR', code: 'EMP-0102' },
-  { key: 'priya', name: 'Priya Shah', permission: 'APPROVER', code: 'EMP-0201' },
-  { key: 'arjun', name: 'Arjun Nair', permission: 'APPROVER', code: 'EMP-0202' },
-  { key: 'meera', name: 'Meera Kulkarni', permission: 'APPROVER', code: 'EMP-0203' },
-  { key: 'dev', name: 'Dev Iyer', permission: 'APPROVER', code: 'EMP-0204' },
-  { key: 'lina', name: 'Lina Fernandes', permission: 'APPROVER', code: 'EMP-0205' },
+/** Roles per person (D23): Priya, Meera and Kabir are both Creators and Approvers. */
+const PEOPLE: Array<{ key: string; name: string; permissions: Permission[]; code: string }> = [
+  { key: 'admin', name: 'Anita Mehta', permissions: ['ADMIN'], code: 'EMP-0001' },
+  { key: 'cfo', name: 'Vikram Malhotra', permissions: ['CFO'], code: 'EMP-0002' },
+  { key: 'rahul', name: 'Rahul Mehra', permissions: ['CREATOR'], code: 'EMP-0101' },
+  { key: 'sara', name: 'Sara Khan', permissions: ['CREATOR'], code: 'EMP-0102' },
+  { key: 'arjun', name: 'Arjun Nair', permissions: ['APPROVER'], code: 'EMP-0202' },
+  { key: 'dev', name: 'Dev Iyer', permissions: ['APPROVER'], code: 'EMP-0204' },
+  { key: 'lina', name: 'Lina Fernandes', permissions: ['APPROVER'], code: 'EMP-0205' },
+  { key: 'priya', name: 'Priya Shah', permissions: ['CREATOR', 'APPROVER'], code: 'EMP-0201' },
+  { key: 'meera', name: 'Meera Kulkarni', permissions: ['CREATOR', 'APPROVER'], code: 'EMP-0203' },
+  { key: 'kabir', name: 'Kabir Singh', permissions: ['CREATOR', 'APPROVER'], code: 'EMP-0301' },
 ];
 
 export const demoEmail = (key: string) => `${key}@${DEMO_DOMAIN}`;
@@ -77,9 +80,8 @@ export async function seedDemo(
   const [{ others } = { others: 0 }] = await db
     .select({ others: count() })
     .from(employees)
-    .innerJoin(roles, eq(roles.id, employees.roleId))
     .where(
-      withAdmin ? undefined : sql`not (${employees.isActive} and ${roles.permission} = 'ADMIN')`,
+      withAdmin ? undefined : not(and(eq(employees.isActive, true), holdsPermission('ADMIN'))!),
     );
   const [{ docs } = { docs: 0 }] = await db.select({ docs: count() }).from(workflows);
   const [{ firms } = { firms: 0 }] = await db.select({ firms: count() }).from(companies);
@@ -109,18 +111,22 @@ export async function seedDemo(
   const passwordHash = await hashPassword(password);
   const ids: Record<string, string> = {};
   const names: Record<string, string> = {};
-  for (const p of PEOPLE.filter((p) => withAdmin || p.permission !== 'ADMIN')) {
+  for (const p of PEOPLE.filter((p) => withAdmin || !p.permissions.includes('ADMIN'))) {
     const [row] = await db
       .insert(employees)
       .values({
         name: p.name,
         email: demoEmail(p.key),
         employeeCode: takenCodes.has(p.code) ? null : p.code,
-        roleId: roleIds.get(p.permission)!,
         passwordHash,
-        isCfo: p.permission === 'CFO',
+        isCfo: p.permissions.includes('CFO'),
       })
       .returning({ id: employees.id });
+    await setRoles(
+      db,
+      row!.id,
+      p.permissions.map((permission) => ({ id: roleIds.get(permission)!, permission })),
+    );
     ids[p.key] = row!.id;
     names[p.key] = p.name;
   }
@@ -186,6 +192,8 @@ export async function seedDemo(
     creator: string;
     vendor: string;
     amount: string;
+    /** A per-document chain instead of the company default */
+    chain?: Array<[string, number]>;
     steps: Step[];
   }> = [
     {
@@ -256,6 +264,44 @@ export async function seedDemo(
         ['cfo', 'REJECT', 'Duplicate of invoice VA-1182, already paid'],
       ],
     },
+    // Submitted by people who are also Approvers: never in their own chain (D23)
+    {
+      // Priya is in Microtech's default chain, so she is left out of this one
+      file: 'IT_Support_Contract.pdf',
+      company: 'mic',
+      creator: 'priya',
+      vendor: 'Helix IT Services',
+      amount: '96000.00',
+      chain: [
+        ['arjun', 1],
+        ['meera', 2],
+      ],
+      steps: [['arjun', 'APPROVE', 'Renewal at last year’s rate']],
+    },
+    {
+      file: 'Travel_Reimbursement_Q3.pdf',
+      company: 'nim',
+      creator: 'kabir',
+      vendor: 'Kabir Singh (staff)',
+      amount: '18450.00',
+      steps: [],
+    },
+    {
+      // A customised chain: Kabir (Creator and Approver) approves in place of Lina
+      file: 'Warehouse_Rent_Oct.pdf',
+      company: 'orb',
+      creator: 'meera',
+      vendor: 'Portside Warehousing',
+      amount: '142000.00',
+      chain: [
+        ['dev', 1],
+        ['kabir', 2],
+      ],
+      steps: [
+        ['dev', 'APPROVE'],
+        ['kabir', 'APPROVE', 'Matches the lease schedule'],
+      ],
+    },
   ];
 
   const workflowIds: string[] = [];
@@ -276,7 +322,9 @@ export async function seedDemo(
     const { id } = await submitWorkflow(db, storage, ids[d.creator]!, {
       uploadId,
       companyId: companyIds[d.company]!,
-      approvers: chainOf(d.company),
+      approvers: d.chain
+        ? d.chain.map(([who, position]) => ({ employeeId: ids[who]!, position }))
+        : chainOf(d.company),
       invoiceNumber: `INV-2026-${String(1040 + i)}`,
       vendorName: d.vendor,
       invoiceDate: '2026-09-15',

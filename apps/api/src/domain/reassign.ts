@@ -1,10 +1,11 @@
 import type { ReassignRequest } from '@docflow/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { auditEvents, employees, roles, workflowSteps, workflows } from '../db/schema.js';
+import { auditEvents, employees, workflowSteps, workflows } from '../db/schema.js';
 import { AppError, conflict, notFound } from '../errors.js';
 import { activeCfo } from './chain.js';
 import { yourTurnForPosition } from './decide.js';
+import { holdsPermission } from './roles.js';
 
 /**
  * Admin hands a not-yet-decided step to someone else (decisions.md D9): an approver who left
@@ -56,16 +57,22 @@ export async function reassignStep(
       const [person] = await tx
         .select({ id: employees.id, name: employees.name, email: employees.email })
         .from(employees)
-        .innerJoin(roles, eq(roles.id, employees.roleId))
         .where(
           and(
             eq(employees.id, input.employeeId),
             eq(employees.isActive, true),
-            eq(roles.isActive, true),
-            eq(roles.permission, 'APPROVER'),
+            holdsPermission('APPROVER'),
           ),
         );
-      if (!person || person.id === wf.createdBy) {
+      // Someone with both Creator and Approver roles never approves their own document (D23)
+      if (person?.id === wf.createdBy) {
+        throw new AppError(
+          400,
+          'CREATOR_IN_CHAIN',
+          'The person who submitted this document can’t approve it.',
+        );
+      }
+      if (!person) {
         throw new AppError(
           400,
           'INELIGIBLE_APPROVER',

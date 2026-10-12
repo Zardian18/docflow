@@ -6,8 +6,9 @@ import {
 } from '@docflow/shared';
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import type { DbOrTx } from '../db/client.js';
-import { companyDefaultApprovers, employees, roles } from '../db/schema.js';
+import { companyDefaultApprovers, employees } from '../db/schema.js';
 import { AppError } from '../errors.js';
+import { holdsPermission } from './roles.js';
 
 export interface CheckedApprover extends ChainEntry {
   name: string;
@@ -16,8 +17,8 @@ export interface CheckedApprover extends ChainEntry {
 
 /**
  * Structural rules (shared with the web forms: min 2, no duplicates, positive steps) plus
- * eligibility: every approver must be an active employee whose active role has the
- * APPROVER permission (D3, invariant 11). Returns the chain with positions normalised
+ * eligibility: every approver must be an active employee holding an active role with the
+ * APPROVER permission (D3, D23, invariant 11). Returns the chain with positions normalised
  * to 1..n and each approver's current name/email for snapshots.
  */
 export async function checkChain(
@@ -32,14 +33,8 @@ export async function checkChain(
   const eligible = await db
     .select({ id: employees.id, name: employees.name, email: employees.email })
     .from(employees)
-    .innerJoin(roles, eq(roles.id, employees.roleId))
     .where(
-      and(
-        inArray(employees.id, ids),
-        eq(employees.isActive, true),
-        eq(roles.isActive, true),
-        eq(roles.permission, 'APPROVER'),
-      ),
+      and(inArray(employees.id, ids), eq(employees.isActive, true), holdsPermission('APPROVER')),
     );
   const byId = new Map(eligible.map((e) => [e.id, e]));
   const ineligible = ids.filter((id) => !byId.has(id));
@@ -86,8 +81,7 @@ export async function activeCfo(db: DbOrTx) {
   const [cfo] = await db
     .select({ id: employees.id, name: employees.name, email: employees.email })
     .from(employees)
-    .innerJoin(roles, eq(roles.id, employees.roleId))
-    .where(and(eq(employees.isCfo, true), eq(employees.isActive, true), eq(roles.isActive, true)));
+    .where(and(eq(employees.isCfo, true), eq(employees.isActive, true), holdsPermission('CFO')));
   return cfo ?? null;
 }
 

@@ -26,7 +26,7 @@ export const approvalRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db
     { schema: { response: { 200: PendingApprovalsResponse } } },
     async (request) => {
       const user = currentUser(request);
-      const period: 'week' | 'month' = user.permission === 'CFO' ? 'month' : 'week';
+      const period: 'week' | 'month' = user.permissions.includes('CFO') ? 'month' : 'week';
 
       const { rows } = await db.execute<{
         workflow_id: string;
@@ -67,13 +67,12 @@ export const approvalRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db
     `);
 
       // CFO only: rejected before reaching me (my final step was skipped)
-      const { rows: early } =
-        user.permission === 'CFO'
-          ? await db.execute<{ n: number }>(sql`
+      const { rows: early } = user.permissions.includes('CFO')
+        ? await db.execute<{ n: number }>(sql`
               select count(*)::int as n from workflow_steps
                where employee_id = ${user.id} and is_cfo and status = 'SKIPPED'
             `)
-          : { rows: [{ n: 0 }] };
+        : { rows: [{ n: 0 }] };
 
       return {
         items: rows.map((r) => ({

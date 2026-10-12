@@ -44,8 +44,10 @@ export async function planReset(db: DbOrTx, keepEmails: string[]): Promise<Reset
     name: string;
     ok: boolean;
   }>(sql`
-    select e.email, e.name, (e.is_active and r.is_system and r.permission = 'ADMIN') as ok
-    from employees e join roles r on r.id = e.role_id
+    select e.email, e.name, e.is_active and exists (
+             select 1 from employee_roles er join roles r on r.id = er.role_id
+              where er.employee_id = e.id and r.is_system and r.permission = 'ADMIN') as ok
+    from employees e
     where e.email in ${list(emails)}`);
   for (const email of emails) {
     const row = kept.find((k) => k.email === email);

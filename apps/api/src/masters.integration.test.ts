@@ -163,7 +163,7 @@ describe.skipIf(!TEST_DB_URL)('masters', () => {
       const custom = (
         await admin.post('/v1/roles', { name: 'Auditor', permission: 'APPROVER' })
       ).json();
-      await admin.post('/v1/employees', { name: 'Aud', email: 'aud@t.co', roleId: custom.id });
+      await admin.post('/v1/employees', { name: 'Aud', email: 'aud@t.co', roleIds: [custom.id] });
       const inUse = await admin.put(`/v1/roles/${custom.id}`, { name: 'Auditor', isActive: false });
       expect(inUse.json().error).toBe('ROLE_IN_USE');
     });
@@ -188,7 +188,7 @@ describe.skipIf(!TEST_DB_URL)('masters', () => {
         name: 'K. Verma',
         email: 'K.Verma@T.co',
         employeeCode: 'emp-7',
-        roleId: await systemRoleId(db, 'APPROVER'),
+        roleIds: [await systemRoleId(db, 'APPROVER')],
       });
       expect(res.statusCode).toBe(201);
       expect(res.json()).toMatchObject({
@@ -202,7 +202,7 @@ describe.skipIf(!TEST_DB_URL)('masters', () => {
       const res = await admin.post('/v1/employees', {
         name: 'Dup',
         email: 'RSHAH@t.co',
-        roleId: await systemRoleId(db, 'APPROVER'),
+        roleIds: [await systemRoleId(db, 'APPROVER')],
       });
       expect(res.json().error).toBe('EMAIL_TAKEN');
     });
@@ -212,13 +212,13 @@ describe.skipIf(!TEST_DB_URL)('masters', () => {
       const first = await admin.post('/v1/employees', {
         name: 'V. Malhotra',
         email: 'cfo@t.co',
-        roleId: cfoRole,
+        roleIds: [cfoRole],
       });
       expect(first.statusCode).toBe(201);
       const second = await admin.post('/v1/employees', {
         name: 'Other CFO',
         email: 'cfo2@t.co',
-        roleId: cfoRole,
+        roleIds: [cfoRole],
       });
       expect(second.statusCode).toBe(409);
       expect(second.json().error).toBe('CFO_EXISTS');
@@ -228,7 +228,7 @@ describe.skipIf(!TEST_DB_URL)('masters', () => {
       const promote = await admin.put(`/v1/employees/${creatorId}`, {
         name: 'Rahul Creator',
         email: 'rc@t.co',
-        roleId: cfoRole,
+        roleIds: [cfoRole],
         isActive: true,
       });
       expect(promote.json().error).toBe('CFO_EXISTS');
@@ -241,18 +241,22 @@ describe.skipIf(!TEST_DB_URL)('masters', () => {
     it('a replacement CFO can be added once the old one is deactivated', async () => {
       const cfoRole = await systemRoleId(db, 'CFO');
       const old = (
-        await admin.post('/v1/employees', { name: 'Old CFO', email: 'old@t.co', roleId: cfoRole })
+        await admin.post('/v1/employees', {
+          name: 'Old CFO',
+          email: 'old@t.co',
+          roleIds: [cfoRole],
+        })
       ).json();
       await admin.put(`/v1/employees/${old.id}`, {
         name: 'Old CFO',
         email: 'old@t.co',
-        roleId: cfoRole,
+        roleIds: [cfoRole],
         isActive: false,
       });
       const next = await admin.post('/v1/employees', {
         name: 'New CFO',
         email: 'new@t.co',
-        roleId: cfoRole,
+        roleIds: [cfoRole],
       });
       expect(next.statusCode).toBe(201);
     });
@@ -262,7 +266,7 @@ describe.skipIf(!TEST_DB_URL)('masters', () => {
       await admin.put(`/v1/employees/${approverB}`, {
         name: 'P. Kulkarni',
         email: 'pk@t.co',
-        roleId: await systemRoleId(db, 'APPROVER'),
+        roleIds: [await systemRoleId(db, 'APPROVER')],
         isActive: false,
       });
       expect((await approver.get('/v1/auth/me')).statusCode).toBe(401);
@@ -281,7 +285,7 @@ describe.skipIf(!TEST_DB_URL)('masters', () => {
       const deactivate = await admin.put(`/v1/employees/${approverA}`, {
         name: 'R. Shah',
         email: 'rshah@t.co',
-        roleId: approverRole,
+        roleIds: [approverRole],
         isActive: false,
       });
       expect(deactivate.statusCode).toBe(409);
@@ -293,7 +297,7 @@ describe.skipIf(!TEST_DB_URL)('masters', () => {
       const demote = await admin.put(`/v1/employees/${approverA}`, {
         name: 'R. Shah',
         email: 'rshah@t.co',
-        roleId: await systemRoleId(db, 'CREATOR'),
+        roleIds: [await systemRoleId(db, 'CREATOR')],
         isActive: true,
       });
       expect(demote.json().error).toBe('EMPLOYEE_IN_CHAINS');
@@ -304,7 +308,7 @@ describe.skipIf(!TEST_DB_URL)('masters', () => {
       const res = await admin.put(`/v1/employees/${adminId}`, {
         name: 'A. Mehta',
         email: 'admin@t.co',
-        roleId: adminRole,
+        roleIds: [adminRole],
         isActive: false,
       });
       expect(res.json().error).toBe('CANNOT_CHANGE_SELF');
@@ -322,7 +326,7 @@ describe.skipIf(!TEST_DB_URL)('masters', () => {
       const ok = await bClient.put(`/v1/employees/${adminId}`, {
         name: 'A. Mehta',
         email: 'admin@t.co',
-        roleId: adminRole,
+        roleIds: [adminRole],
         isActive: false,
       });
       expect(ok.statusCode).toBe(200);
@@ -330,7 +334,7 @@ describe.skipIf(!TEST_DB_URL)('masters', () => {
       const last = await bClient.put(`/v1/employees/${second}`, {
         name: 'B. Admin',
         email: 'b@t.co',
-        roleId: adminRole,
+        roleIds: [adminRole],
         isActive: false,
       });
       expect(last.statusCode).toBe(409);
