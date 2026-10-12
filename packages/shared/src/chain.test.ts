@@ -64,7 +64,7 @@ describe('field schemas', () => {
   });
 
   it('uppercases codes and turns blanks into null', () => {
-    const base = { name: 'X', email: 'x@y.co', roleId: '6f1a8d2e-3b4c-4d5e-8f90-123456789abc' };
+    const base = { name: 'X', email: 'x@y.co', roleIds: ['6f1a8d2e-3b4c-4d5e-8f90-123456789abc'] };
     expect(EmployeeCreate.parse({ ...base, employeeCode: ' emp-1 ' }).employeeCode).toBe('EMP-1');
     expect(EmployeeCreate.parse({ ...base, employeeCode: '' }).employeeCode).toBeNull();
     expect(CompanyUpsert.parse({ name: 'Microtech', code: 'mic', approvers: [] }).code).toBe('MIC');
