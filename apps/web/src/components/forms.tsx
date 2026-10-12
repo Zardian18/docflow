@@ -73,3 +73,80 @@ export function FormError({ message }: { message?: string }) {
     </p>
   );
 }
+
+export interface CheckboxOption {
+  value: string;
+  label: ReactNode;
+  /** Shown under the label, e.g. why it can't be picked */
+  note?: string;
+  disabled?: boolean;
+}
+
+/** A labelled group of checkboxes (a fieldset, so screen readers announce the group). */
+export function CheckboxList({
+  legend,
+  options,
+  value,
+  onChange,
+  error,
+  hint,
+}: {
+  legend: string;
+  options: CheckboxOption[];
+  value: string[];
+  onChange: (value: string[]) => void;
+  error?: string;
+  hint?: ReactNode;
+}) {
+  const id = useId();
+  const message = error ?? hint;
+  return (
+    <fieldset
+      className="flex min-w-0 flex-col gap-1.5"
+      aria-describedby={message ? `${id}-message` : undefined}
+      aria-invalid={Boolean(error) || undefined}
+    >
+      <legend className="text-muted-foreground mb-1.5 text-[13px]">{legend}</legend>
+      <div className="border-input flex flex-col divide-y rounded-lg border">
+        {options.map((o) => {
+          const checked = value.includes(o.value);
+          return (
+            <label
+              key={o.value}
+              className={cn(
+                'flex cursor-pointer items-start gap-3 px-3 py-2.5 text-sm',
+                o.disabled && !checked && 'cursor-not-allowed opacity-60',
+              )}
+            >
+              <input
+                type="checkbox"
+                className="accent-primary mt-0.5 size-4 shrink-0"
+                checked={checked}
+                disabled={o.disabled && !checked}
+                onChange={(e) =>
+                  onChange(
+                    e.currentTarget.checked
+                      ? [...value, o.value]
+                      : value.filter((v) => v !== o.value),
+                  )
+                }
+              />
+              <span className="flex min-w-0 flex-col">
+                <span>{o.label}</span>
+                {o.note && <span className="text-muted-foreground text-xs">{o.note}</span>}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+      {message && (
+        <p
+          id={`${id}-message`}
+          className={cn('text-xs', error ? 'text-destructive' : 'text-muted-foreground')}
+        >
+          {message}
+        </p>
+      )}
+    </fieldset>
+  );
+}

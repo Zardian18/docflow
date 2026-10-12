@@ -42,7 +42,7 @@ pnpm 12 via corepack (`corepack enable`, or `corepack pnpm …` if the shims can
 | Cron worker locally | `pnpm --filter @docflow/cron-worker dev`, then `curl http://localhost:8787/cdn-cgi/local/scheduled` |
 | Regenerate Worker types after editing a `wrangler.jsonc` | `pnpm --filter @docflow/cron-worker types` |
 | Local Postgres (needs Docker) | `docker compose up -d` |
-| Demo data into an EMPTY database (refuses production and non-empty DBs) | `pnpm --filter @docflow/api seed:demo` (accounts `<name>@demo.docflow.test`, password `demo-password-1`) |
+| Demo data into an EMPTY database (refuses production and non-empty DBs) | `pnpm --filter @docflow/api seed:demo` (accounts `<name>@demo.docflow.test`, password `demo-password-1`; Priya, Meera and Kabir are Creator + Approver) |
 | Demo data on the live site, right after a reset (no demo Admin; prints a random password once) | `pnpm --filter @docflow/api seed:demo --live` |
 | Test-data wipe (D21): **only on the owner's request, after a fresh backup run** | `pnpm --filter @docflow/api reset:data --keep <admin email>` (dry run), then add `--confirm` |
 | Browser + accessibility tests (starts its own API and web build; needs Postgres) | `E2E_DATABASE_URL=postgres://…/docflow_e2e pnpm --filter @docflow/e2e e2e` (first time: `pnpm --filter @docflow/e2e exec playwright install chromium`) |
@@ -74,7 +74,10 @@ Version notes: TypeScript is pinned to 6.0.x because typescript-eslint doesn't s
 8. Emails contain links, never the document, and there is no approve-from-email action.
 9. All timestamps stored in UTC.
 10. **Notification sends are synchronous and best-effort, fired immediately after the transaction in step 6 commits, inside the same request that caused the event.** The cron tick only retries rows still `pending`/`failed`; it is a safety net for provider hiccups, not the primary delivery path, and it must never be the *only* place a send is attempted. (Reasoning: every event that needs an email happens inside a live request from a logged-in person, so the server is never asleep at the moment it matters — see `docs/plan.md` §2.4.)
-11. Only employees whose role has `permission = APPROVER` can be selected in a company's default approver list or a Creator's per-document "add approver" search. Creator-permission employees never appear there, which is what makes self-approval structurally impossible, not just a UI rule.
+11. Only employees holding an active role with `permission = APPROVER` can be selected in a company's default approver list or a Creator's per-document "add approver" search.
+    - **Several roles per person (D23):** a person holds one role, or one Creator-type plus one Approver-type role. Admin and CFO roles are always someone's only role.
+    - **Nobody approves their own document:** a document's creator is never in its chain. The approver search never offers the person searching, submit refuses a chain containing its creator (`CREATOR_IN_CHAIN`), and so does Admin reassign. The New Submission page leaves the creator out of the company default and says so.
+    - **Checks:** read a person's permissions through `holdsPermission()` / `heldRoles()` in `apps/api/src/domain/roles.ts`, never one role.
 12. Login authenticates by `employees.email`, not an employee code.
 
 ## Free-tier constraints that shape the code

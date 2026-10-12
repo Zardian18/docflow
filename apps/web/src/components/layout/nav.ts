@@ -28,3 +28,21 @@ export const NAV_BY_PERMISSION: Record<Permission, NavItem[]> = {
     { label: 'History', to: '/final-approvals/history' },
   ],
 };
+
+/**
+ * Someone with both a Creator and an Approver role (D23) gets both sets, Creator first:
+ * creating, then approving, then each side's history.
+ */
+const CREATOR_AND_APPROVER: NavItem[] = [
+  { label: 'New Submission', to: '/submit' },
+  { label: 'Pending Approvals', to: '/approvals', end: true },
+  { label: 'My Submissions', to: '/submissions' },
+  { label: 'Approval History', to: '/approvals/history' },
+];
+
+export function navFor(me: { permission: Permission; permissions: Permission[] }): NavItem[] {
+  if (me.permissions.includes('CREATOR') && me.permissions.includes('APPROVER')) {
+    return CREATOR_AND_APPROVER;
+  }
+  return NAV_BY_PERMISSION[me.permission];
+}

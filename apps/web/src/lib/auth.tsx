@@ -25,7 +25,7 @@ export function useMe() {
   });
 }
 
-/** Where each permission lands after signing in. */
+/** Where each permission lands after signing in (someone with two roles uses `me.permission`, the leading one). */
 export const HOME_BY_PERMISSION: Record<Permission, string> = {
   ADMIN: '/admin',
   CREATOR: '/submit',
@@ -58,7 +58,7 @@ export function RequireAuth({
     const next = `${location.pathname}${location.search}`;
     return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />;
   }
-  if (allow && !allow.includes(me.data.permission)) {
+  if (allow && !me.data.permissions.some((p) => allow.includes(p))) {
     return <Navigate to={HOME_BY_PERMISSION[me.data.permission]} replace />;
   }
   return children(me.data);

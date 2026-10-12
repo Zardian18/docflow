@@ -1,13 +1,13 @@
-import { PERMISSIONS, RoleCreate, type Permission, type Role } from '@docflow/shared';
+import { isCombinable, PERMISSIONS, type Permission, type Role } from '@docflow/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useState } from 'react';
-import { Controller, useForm } from 'react-hook-form';
+import { Controller, useForm, useWatch } from 'react-hook-form';
 import { toast } from 'sonner';
 import { z } from 'zod';
 import { DeleteButton } from '@/components/ConfirmDeleteDialog';
-import { Field, FormError } from '@/components/forms';
+import { CheckboxList, Field, FormError } from '@/components/forms';
 import { Pagination, SearchField, StatusSelect, useListState } from '@/components/ListControls';
 import { PageBody, PageHeader } from '@/components/PageHeader';
 import { ResponsiveTable, type Column } from '@/components/ResponsiveTable';
@@ -34,8 +34,25 @@ import { api, errorMessage } from '@/lib/api';
 import { MastersTabs } from './MastersLayout';
 import { PERMISSION_DESCRIPTION, PERMISSION_LABEL } from './permissions';
 
-const FormSchema = RoleCreate.extend({ isActive: z.boolean() });
+const FormSchema = z.object({
+  name: z.string().trim().min(1, 'Required').max(120),
+  permission: z.enum(PERMISSIONS),
+  isActive: z.boolean(),
+  excludedRoleIds: z.array(z.uuid()),
+});
 type FormValues = z.infer<typeof FormSchema>;
+
+/** Every role, for the exclusion picker and the "Not with" column */
+function useAllRoles() {
+  return useQuery({
+    queryKey: ['roles', 'all-options'],
+    queryFn: ({ signal }) => api.roles.list({ status: 'all', pageSize: 100 }, signal),
+  });
+}
+
+/** Creator roles can exclude Approver roles and the other way round (D23). */
+const otherKind = (p: Permission): Permission | null =>
+  p === 'CREATOR' ? 'APPROVER' : p === 'APPROVER' ? 'CREATOR' : null;
 
 function RoleDialog({
   role,
@@ -48,17 +65,27 @@ function RoleDialog({
 }) {
   const queryClient = useQueryClient();
   const editing = role !== null;
+  const allRoles = useAllRoles();
   const form = useForm<FormValues>({
     resolver: zodResolver(FormSchema),
     values: role
-      ? { name: role.name, permission: role.permission, isActive: role.isActive }
-      : { name: '', permission: 'APPROVER', isActive: true },
+      ? {
+          name: role.name,
+          permission: role.permission,
+          isActive: role.isActive,
+          excludedRoleIds: role.excludedRoleIds,
+        }
+      : { name: '', permission: 'APPROVER', isActive: true, excludedRoleIds: [] },
   });
+  const permission = useWatch({ control: form.control, name: 'permission' });
+  const excludable = otherKind(permission);
   const save = useMutation({
-    mutationFn: (v: FormValues) =>
-      role
-        ? api.roles.update(role.id, { name: v.name, isActive: v.isActive })
-        : api.roles.create(v),
+    mutationFn: (v: FormValues) => {
+      const excludedRoleIds = isCombinable(v.permission) ? v.excludedRoleIds : [];
+      return role
+        ? api.roles.update(role.id, { name: v.name, isActive: v.isActive, excludedRoleIds })
+        : api.roles.create({ name: v.name, permission: v.permission, excludedRoleIds });
+    },
     onSuccess: (saved) => {
       queryClient.invalidateQueries({ queryKey: ['roles'] });
       toast.success(editing ? `Saved ${saved.name}` : `Added ${saved.name}`);
@@ -117,7 +144,11 @@ function RoleDialog({
                 render={({ field }) => (
                   <Select
                     value={field.value}
-                    onValueChange={(v) => field.onChange(v as Permission)}
+                    onValueChange={(v) => {
+                      field.onChange(v as Permission);
+                      // Exclusions belong to one kind of role; start again for another
+                      form.setValue('excludedRoleIds', []);
+                    }}
                     disabled={editing}
                   >
                     <SelectTrigger id={id} aria-describedby={describedBy} className="w-full">
@@ -140,6 +171,46 @@ function RoleDialog({
               />
             )}
           </Field>
+          {excludable ? (
+            <Controller
+              control={form.control}
+              name="excludedRoleIds"
+              render={({ field }) => {
+                const options = (allRoles.data?.items ?? []).filter(
+                  (r) => r.permission === excludable && r.id !== role?.id,
+                );
+                return allRoles.isPending ? (
+                  <p className="text-muted-foreground text-sm">Loading roles…</p>
+                ) : options.length === 0 ? (
+                  <p className="text-muted-foreground text-sm">
+                    There are no {PERMISSION_LABEL[excludable]} roles to exclude.
+                  </p>
+                ) : (
+                  <CheckboxList
+                    legend="Can’t be combined with"
+                    hint={`Nobody can hold this role together with a role ticked here. This applies both ways.`}
+                    value={field.value}
+                    onChange={field.onChange}
+                    options={options.map((r) => ({
+                      value: r.id,
+                      label: (
+                        <>
+                          {r.name}
+                          {!r.isActive && (
+                            <span className="text-muted-foreground"> (inactive)</span>
+                          )}
+                        </>
+                      ),
+                    }))}
+                  />
+                );
+              }}
+            />
+          ) : (
+            <p className="text-muted-foreground text-sm">
+              {PERMISSION_LABEL[permission]} roles are never combined with other roles.
+            </p>
+          )}
           {editing && (
             <Field label="Status">
               {({ id }) => (
@@ -202,6 +273,8 @@ export function RolesPage() {
     role: null,
   });
 
+  const allRoles = useAllRoles();
+  const nameOf = new Map((allRoles.data?.items ?? []).map((r) => [r.id, r.name]));
   const columns: Column<Role>[] = [
     {
       key: 'name',
@@ -222,6 +295,20 @@ export function RolesPage() {
       ),
     },
     { key: 'people', header: 'Active employees', cell: (r) => r.activeEmployeeCount },
+    {
+      key: 'excluded',
+      header: 'Not combined with',
+      cell: (r) =>
+        isCombinable(r.permission) ? (
+          r.excludedRoleIds.length > 0 ? (
+            <span>{r.excludedRoleIds.map((id) => nameOf.get(id) ?? '…').join(', ')}</span>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          )
+        ) : (
+          <span className="text-muted-foreground">Any other role</span>
+        ),
+    },
     {
       key: 'type',
       header: 'Type',

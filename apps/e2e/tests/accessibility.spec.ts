@@ -23,6 +23,11 @@ const SCREENS: Array<{ who: Person | null; path: string; wait: string | RegExp }
   { who: 'cfo', path: '/final-approvals', wait: 'Server_Hardware_PO.pdf' },
   { who: 'cfo', path: '/final-approvals?view=rejected', wait: 'Marketing_Retainer.pdf' },
   { who: 'cfo', path: '/final-approvals/history', wait: /History/ },
+  // Someone with both Creator and Approver roles (D23)
+  { who: 'meera', path: '/submit', wait: /Upload|Drop/i },
+  { who: 'meera', path: '/approvals', wait: 'IT_Support_Contract.pdf' },
+  { who: 'meera', path: '/submissions', wait: 'Warehouse_Rent_Oct.pdf' },
+  { who: 'meera', path: '/approvals/history', wait: 'Server_Hardware_PO.pdf' },
 ];
 
 // Detail pages, reached by clicking through like a user would

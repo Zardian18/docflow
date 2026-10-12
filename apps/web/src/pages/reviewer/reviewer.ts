@@ -9,6 +9,7 @@ export const REVIEWER = {
     stats: ['Awaiting You', 'Approved This Week', 'Rejected This Week'],
     emptyTitle: 'Nothing is waiting for you',
     emptyBody: 'Documents appear here when they reach your step in an approval chain.',
+    historyTitle: 'Approval History',
     historyDescription: 'Documents you have approved or rejected',
   },
   cfo: {
@@ -18,6 +19,7 @@ export const REVIEWER = {
     stats: ['Pending CFO', 'Completed This Month', 'Rejected This Month'],
     emptyTitle: 'Nothing is waiting for your final approval',
     emptyBody: 'Documents appear here once every approver in their chain has approved.',
+    historyTitle: 'History',
     historyDescription: 'Documents you have signed off or rejected',
   },
 } as const;

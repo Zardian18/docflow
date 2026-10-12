@@ -260,3 +260,36 @@ How to restore: `docs/runbook-backup.md`.
 - **Plan:**
   1. Back up, reset, then load the live demo for the owner to try.
   2. Before go-live, back up and reset again, then enter the real data.
+
+### D23 — Several roles per person (owner, 12 Oct 2026)
+**Status: ANSWERED.** The owner asked for people who create documents in one chain and approve in another, and accepted all of Claude's proposals.
+- **Combinations:**
+  - A person holds one role, or one Creator-type role plus one Approver-type role.
+  - Any role with the Admin or CFO permission, built-in or custom, is always someone's only role.
+  - Two roles of the same kind can't be combined.
+- **Exclusions:**
+  - In Role Master, a Creator role can be marked "can't be combined with" Approver roles, and the other way round.
+  - Exclusions are mutual: saving one on either role applies to both.
+  - Saving an exclusion that people already break is refused, and the error names them.
+- **Nobody approves their own document** (the owner's words: the same person must never be in the same chain twice under different roles):
+  - The approver search never offers the person searching.
+  - Submit refuses a chain containing its creator.
+  - Admin reassign refuses to hand a step to the document's creator.
+  - Choosing a company whose default chain includes the creator leaves them out of this document's chain, with a note. If fewer than 2 approvers remain, they add someone.
+  - The company's saved chain is unchanged.
+  - Nobody appears twice in one chain (already enforced).
+- **Tabs:**
+  - Someone with both roles sees New Submission, Pending Approvals, My Submissions, Approval History, and lands on New Submission.
+  - Single-role people see what they saw before. The approver's History page is now titled "Approval History".
+- **D17 still applies:** someone in a company's default chain can't lose their Approver role. They can lose their Creator role.
+- **Filters and sort on every list**, done by the server:
+  - **My Submissions:** status, company, submitted dates, search and sort.
+  - **Approval History and CFO History:** my decision, document status, company, decided dates, search and sort.
+  - **Pending lists and the CFO's "Rejected before final approval" tab:** company, search and sort.
+  - **Details:** search covers the file name, invoice number and vendor, as on the Admin Dashboard. The Company filter lists only companies in that person's own list. The pending cards always count everything.
+  - **Phones:** each list also has a "Sort by" menu, because there the table becomes cards without column headers.
+- **Migration 0008:** everyone's existing role moves into the new `employee_roles` table, so the live site keeps working unchanged until roles are edited.
+- **Demo data:**
+  - **Cast:** 1 CFO, Rahul and Sara (Creator), Arjun, Dev and Lina (Approver), and Priya, Meera and Kabir (both).
+  - **New documents:** three, submitted by the dual-role people, including Priya's Microtech document, where she is left out of her own chain.
+  - **Live site:** loaded only when the owner asks, reusing the current demo password.

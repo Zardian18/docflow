@@ -35,6 +35,11 @@ import {
   type ReassignRequest,
   type SetPasswordRequest,
   type WorkflowCreate,
+  filteredPage,
+  type DecisionHistoryQuery,
+  type MySubmissionsQuery,
+  type PendingQuery,
+  type RejectedBeforeFinalQuery,
 } from '@docflow/shared';
 import { z } from 'zod';
 
@@ -199,8 +204,8 @@ export const api = {
       request('/v1/workflows', { method: 'POST', body }).then((d) =>
         z.object({ id: z.uuid() }).parse(d),
       ),
-    mine: (query: { page?: number; pageSize?: number }, signal?: AbortSignal) =>
-      get(paginated(WorkflowSummary), `/v1/workflows/mine?${listParams(query)}`, signal),
+    mine: (query: MySubmissionsQuery, signal?: AbortSignal) =>
+      get(filteredPage(WorkflowSummary), `/v1/workflows/mine?${listParams(query)}`, signal),
     get: (id: string, signal?: AbortSignal) => get(WorkflowDetail, `/v1/workflows/${id}`, signal),
     /** view: open a PDF in the browser; download: save it. */
     fileLink: (id: string, mode: 'view' | 'download' = 'download') =>
@@ -220,13 +225,13 @@ export const api = {
   },
 
   approvals: {
-    pending: (signal?: AbortSignal) =>
-      get(PendingApprovalsResponse, '/v1/approvals/pending', signal),
-    history: (query: { page?: number; pageSize?: number }, signal?: AbortSignal) =>
-      get(paginated(DecisionHistoryItem), `/v1/approvals/history?${listParams(query)}`, signal),
-    rejectedBeforeFinal: (query: { page?: number; pageSize?: number }, signal?: AbortSignal) =>
+    pending: (query: PendingQuery, signal?: AbortSignal) =>
+      get(PendingApprovalsResponse, `/v1/approvals/pending?${listParams(query)}`, signal),
+    history: (query: DecisionHistoryQuery, signal?: AbortSignal) =>
+      get(filteredPage(DecisionHistoryItem), `/v1/approvals/history?${listParams(query)}`, signal),
+    rejectedBeforeFinal: (query: RejectedBeforeFinalQuery, signal?: AbortSignal) =>
       get(
-        paginated(RejectedBeforeFinalItem),
+        filteredPage(RejectedBeforeFinalItem),
         `/v1/approvals/rejected-before-final?${listParams(query)}`,
         signal,
       ),

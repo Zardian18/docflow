@@ -1,4 +1,11 @@
-import { EmployeeUpdate, type Employee, type PasswordLink } from '@docflow/shared';
+import {
+  EmployeeUpdate,
+  roleSetProblem,
+  type Employee,
+  type HeldRole,
+  type PasswordLink,
+  type Role,
+} from '@docflow/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
@@ -8,7 +15,7 @@ import { Controller, useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import type { z } from 'zod';
 import { DeleteButton } from '@/components/ConfirmDeleteDialog';
-import { Field, FormError } from '@/components/forms';
+import { CheckboxList, Field, FormError } from '@/components/forms';
 import { Pagination, SearchField, StatusSelect, useListState } from '@/components/ListControls';
 import { PageBody, PageHeader } from '@/components/PageHeader';
 import { ResponsiveTable, type Column } from '@/components/ResponsiveTable';
@@ -36,6 +43,69 @@ import { MastersTabs } from './MastersLayout';
 import { PERMISSION_LABEL } from './permissions';
 
 type FormValues = z.input<typeof EmployeeUpdate>;
+
+/** "Accounts Creator · Creator": the permission is added when the name doesn't say it */
+function RoleName({ role }: { role: HeldRole }) {
+  return (
+    <>
+      {role.name}
+      {role.name !== PERMISSION_LABEL[role.permission] && (
+        <span className="text-muted-foreground text-xs">
+          {' '}
+          · {PERMISSION_LABEL[role.permission]}
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
+ * Roles picker (D23): one role, or one Creator role plus one Approver role. A role that can't
+ * join the current choice is disabled with the reason, using the same rule as the server.
+ */
+function RolesField({
+  roles,
+  held,
+  value,
+  onChange,
+  error,
+}: {
+  roles: Role[];
+  held: HeldRole[];
+  value: string[];
+  onChange: (v: string[]) => void;
+  error?: string;
+}) {
+  // Roles the person holds that have since been deactivated still show, so they can be removed
+  const inactiveHeld = held
+    .filter((h) => !roles.some((r) => r.id === h.id))
+    .map((h) => ({ ...h, isActive: false, excludedRoleIds: [] as string[] }));
+  const all = [...roles, ...inactiveHeld];
+  const chosen = all.filter((r) => value.includes(r.id));
+  return (
+    <CheckboxList
+      legend="Roles"
+      value={value}
+      onChange={onChange}
+      error={error ?? roleSetProblem(chosen) ?? undefined}
+      hint="One role, or a Creator role and an Approver role together. Admin and CFO roles are always on their own."
+      options={all.map((r) => {
+        const problem = value.includes(r.id) ? null : roleSetProblem([...chosen, r]);
+        return {
+          value: r.id,
+          label: (
+            <>
+              <RoleName role={r} />
+              {!r.isActive && <span className="text-muted-foreground"> (inactive)</span>}
+            </>
+          ),
+          disabled: problem !== null || !r.isActive,
+          note: problem ?? undefined,
+        };
+      })}
+    />
+  );
+}
 
 function useActiveRoles() {
   return useQuery({
@@ -120,10 +190,10 @@ function EmployeeDialog({
           name: employee.name,
           email: employee.email,
           employeeCode: employee.employeeCode ?? '',
-          roleId: employee.roleId,
+          roleIds: employee.roles.map((r) => r.id),
           isActive: employee.isActive,
         }
-      : { name: '', email: '', employeeCode: '', roleId: '', isActive: true },
+      : { name: '', email: '', employeeCode: '', roleIds: [], isActive: true },
   });
   const save = useMutation({
     mutationFn: (v: FormValues) =>
@@ -138,7 +208,6 @@ function EmployeeDialog({
     },
   });
   const errors = form.formState.errors;
-  // Roles list for the picker: active roles, plus the employee's current role if it's inactive
   const roleOptions = roles.data?.items ?? [];
 
   return (
@@ -194,7 +263,7 @@ function EmployeeDialog({
               />
             )}
           </Field>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4">
             <Field label="Employee code (optional)" error={errors.employeeCode?.message}>
               {({ id, describedBy, invalid }) => (
                 <Input
@@ -206,47 +275,24 @@ function EmployeeDialog({
                 />
               )}
             </Field>
-            <Field label="Role" error={errors.roleId ? 'Choose a role' : undefined}>
-              {({ id, describedBy, invalid }) => (
-                <Controller
-                  control={form.control}
-                  name="roleId"
-                  render={({ field }) => (
-                    <Select value={field.value || undefined} onValueChange={field.onChange}>
-                      <SelectTrigger
-                        id={id}
-                        aria-describedby={describedBy}
-                        aria-invalid={invalid}
-                        className="w-full"
-                      >
-                        <SelectValue
-                          placeholder={roles.isPending ? 'Loading roles…' : 'Choose a role'}
-                        />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {employee && !roleOptions.some((r) => r.id === employee.roleId) && (
-                          <SelectItem value={employee.roleId}>
-                            {employee.roleName} (inactive)
-                          </SelectItem>
-                        )}
-                        {roleOptions.map((r) => (
-                          <SelectItem key={r.id} value={r.id}>
-                            {r.name}
-                            {r.name !== PERMISSION_LABEL[r.permission] && (
-                              <span className="text-muted-foreground">
-                                {' '}
-                                · {PERMISSION_LABEL[r.permission]}
-                              </span>
-                            )}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
+          </div>
+          {roles.isPending ? (
+            <p className="text-muted-foreground text-sm">Loading roles…</p>
+          ) : (
+            <Controller
+              control={form.control}
+              name="roleIds"
+              render={({ field }) => (
+                <RolesField
+                  roles={roleOptions}
+                  held={employee?.roles ?? []}
+                  value={field.value}
+                  onChange={field.onChange}
+                  error={errors.roleIds?.message}
                 />
               )}
-            </Field>
-          </div>
+            />
+          )}
           {editing && (
             <Field label="Status">
               {({ id }) => (
@@ -349,16 +395,14 @@ export function EmployeesPage() {
     },
     {
       key: 'role',
-      header: 'Role',
+      header: 'Roles',
       cell: (e) => (
-        <span>
-          {e.roleName}
-          {e.roleName !== PERMISSION_LABEL[e.permission] && (
-            <span className="text-muted-foreground text-xs">
-              {' '}
-              · {PERMISSION_LABEL[e.permission]}
+        <span className="flex flex-col">
+          {e.roles.map((r) => (
+            <span key={r.id}>
+              <RoleName role={r} />
             </span>
-          )}
+          ))}
         </span>
       ),
     },
@@ -408,7 +452,7 @@ export function EmployeesPage() {
     <>
       <PageHeader
         title="Employee Master"
-        description="Everyone who can sign in, and the role each person holds"
+        description="Everyone who can sign in, and the roles each person holds"
         actions={
           <Button onClick={() => setDialog({ open: true, employee: null })}>
             <Plus aria-hidden /> Add Employee

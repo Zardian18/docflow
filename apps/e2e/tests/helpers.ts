@@ -14,6 +14,7 @@ export const PEOPLE = {
   meera: 'Meera Kulkarni',
   dev: 'Dev Iyer',
   lina: 'Lina Fernandes',
+  kabir: 'Kabir Singh',
 } as const;
 export type Person = keyof typeof PEOPLE;
 
