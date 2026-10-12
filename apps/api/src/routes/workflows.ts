@@ -2,14 +2,16 @@ import {
   DecisionRequest,
   DecisionResult,
   FileLink,
+  filteredPage,
   IdParam,
-  paginated,
+  MySubmissionsQuery,
   ReassignRequest,
   WorkflowCreate,
   WorkflowDetail,
   WorkflowSummary,
+  type MySubmissionSort,
 } from '@docflow/shared';
-import { and, asc, count, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, lte, or, sql, type SQL } from 'drizzle-orm';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import type { AuthUser } from '../auth/sessions.js';
@@ -24,6 +26,7 @@ import { deliver, type EmailProvider } from '../notify/outbox.js';
 import { currentUser, requirePermission, requireUser } from '../plugins/auth.js';
 import type { StorageService } from '../storage/storage.js';
 import { perUserLimit, type RouteDeps } from './deps.js';
+import { containsPattern } from './query-helpers.js';
 
 const FILE_LINK_SECONDS = 5 * 60;
 
@@ -83,12 +86,26 @@ async function visibleWorkflow(db: Db, user: AuthUser, id: string) {
   throw notFound('Document');
 }
 
-const PageQuery = z.object({
-  page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).default(20),
-});
-
 const StepParams = z.object({ id: z.uuid(), stepId: z.uuid() });
+
+const MINE_SORT: Record<MySubmissionSort, SQL> = {
+  submitted: sql`${workflows.submittedAt}`,
+  updated: sql`${workflows.updatedAt}`,
+  document: sql`lower(${workflows.fileName})`,
+  company: sql`lower(${companies.name})`,
+  status: sql`${workflows.status}`,
+};
+
+/** Matches the file name, invoice number or vendor, like the Admin Dashboard search. */
+export function documentSearch(q: string | undefined) {
+  if (!q) return undefined;
+  const pattern = containsPattern(q);
+  return or(
+    sql`lower(${workflows.fileName}) like ${pattern}`,
+    sql`lower(${workflows.invoiceNumber}) like ${pattern}`,
+    sql`lower(${workflows.vendorName}) like ${pattern}`,
+  );
+}
 
 export const workflowRoutes: FastifyPluginAsyncZod<
   RouteDeps & { storage: StorageService; email: EmailProvider | null }
@@ -113,22 +130,45 @@ export const workflowRoutes: FastifyPluginAsyncZod<
     '/mine',
     {
       onRequest: requirePermission('CREATOR'),
-      schema: { querystring: PageQuery, response: { 200: paginated(WorkflowSummary) } },
+      schema: {
+        querystring: MySubmissionsQuery,
+        response: { 200: filteredPage(WorkflowSummary) },
+      },
     },
     async (request) => {
       const user = currentUser(request);
-      const { page, pageSize } = request.query;
+      const query = request.query;
       const mine = eq(workflows.createdBy, user.id);
-      const [rows, [totals]] = await Promise.all([
+      const where = and(
+        mine,
+        query.status ? eq(workflows.status, query.status) : undefined,
+        query.companyId ? eq(workflows.companyId, query.companyId) : undefined,
+        query.submittedFrom ? gte(workflows.submittedAt, new Date(query.submittedFrom)) : undefined,
+        query.submittedTo ? lte(workflows.submittedAt, new Date(query.submittedTo)) : undefined,
+        documentSearch(query.q),
+      );
+      const order = query.dir === 'asc' ? asc : desc;
+      const [rows, [totals], facets] = await Promise.all([
         db
           .select(summaryColumns)
           .from(workflows)
           .innerJoin(companies, eq(companies.id, workflows.companyId))
+          .where(where)
+          // id breaks ties so pages never overlap or skip rows
+          .orderBy(order(MINE_SORT[query.sort]), order(workflows.id))
+          .limit(query.pageSize)
+          .offset((query.page - 1) * query.pageSize),
+        db
+          .select({ total: count() })
+          .from(workflows)
+          .innerJoin(companies, eq(companies.id, workflows.companyId))
+          .where(where),
+        db
+          .selectDistinct({ id: companies.id, name: companies.name })
+          .from(workflows)
+          .innerJoin(companies, eq(companies.id, workflows.companyId))
           .where(mine)
-          .orderBy(desc(workflows.submittedAt))
-          .limit(pageSize)
-          .offset((page - 1) * pageSize),
-        db.select({ total: count() }).from(workflows).where(mine),
+          .orderBy(companies.name),
       ]);
       return {
         items: rows.map((r) => ({
@@ -137,8 +177,9 @@ export const workflowRoutes: FastifyPluginAsyncZod<
           updatedAt: iso(r.updatedAt),
         })),
         total: totals?.total ?? 0,
-        page,
-        pageSize,
+        page: query.page,
+        pageSize: query.pageSize,
+        companies: facets,
       };
     },
   );

@@ -1,21 +1,53 @@
 import {
   DecisionHistoryItem,
-  paginated,
+  DecisionHistoryQuery,
+  filteredPage,
   PendingApprovalsResponse,
+  PendingQuery,
   RejectedBeforeFinalItem,
+  RejectedBeforeFinalQuery,
+  type CompanyFacet,
+  type HistorySort,
+  type PendingSort,
+  type RejectedSort,
 } from '@docflow/shared';
-import { sql } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
-import { z } from 'zod';
 import { currentUser, requirePermission } from '../plugins/auth.js';
 import type { RouteDeps } from './deps.js';
+import { containsPattern } from './query-helpers.js';
 
 const iso = (d: Date | string) => new Date(d).toISOString();
 
-const PageQuery = z.object({
-  page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).default(20),
-});
+// Filters for the raw queries below, where `w` is the workflow and `c` its company
+const optional = (condition: SQL | false) => (condition === false ? sql`` : sql` and ${condition}`);
+const companyIs = (companyId: string | undefined) =>
+  optional(companyId !== undefined && sql`w.company_id = ${companyId}`);
+/** File name, invoice number or vendor, like the Admin Dashboard search */
+function searchFor(q: string | undefined) {
+  if (!q) return sql``;
+  const p = containsPattern(q);
+  return sql` and (lower(w.file_name) like ${p} or lower(w.invoice_number) like ${p}
+                   or lower(w.vendor_name) like ${p})`;
+}
+const direction = (dir: 'asc' | 'desc') => sql.raw(dir === 'asc' ? 'asc' : 'desc');
+
+const PENDING_SORT: Record<PendingSort, SQL> = {
+  waiting: sql`coalesce(s.activated_at, w.submitted_at)`,
+  document: sql`lower(w.file_name)`,
+  company: sql`lower(c.name)`,
+};
+const HISTORY_SORT: Record<HistorySort, SQL> = {
+  decided: sql`s.decided_at`,
+  document: sql`lower(w.file_name)`,
+  company: sql`lower(c.name)`,
+  status: sql`w.status`,
+};
+const REJECTED_SORT: Record<RejectedSort, SQL> = {
+  rejected: sql`r.decided_at`,
+  document: sql`lower(w.file_name)`,
+  company: sql`lower(c.name)`,
+};
 
 /** Screens 06 and 09 (what is waiting for me) plus the History pages. */
 export const approvalRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db }) => {
@@ -23,9 +55,12 @@ export const approvalRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db
 
   app.get(
     '/pending',
-    { schema: { response: { 200: PendingApprovalsResponse } } },
+    { schema: { querystring: PendingQuery, response: { 200: PendingApprovalsResponse } } },
     async (request) => {
       const user = currentUser(request);
+      const query = request.query;
+      const waitingForMe = sql`s.employee_id = ${user.id} and s.status = 'PENDING'
+         and w.status in ('PENDING_APPROVER', 'PENDING_CFO')`;
       const period: 'week' | 'month' = user.permissions.includes('CFO') ? 'month' : 'week';
 
       const { rows } = await db.execute<{
@@ -52,10 +87,17 @@ export const approvalRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db
         from workflow_steps s
         join workflows w on w.id = s.workflow_id
         join companies c on c.id = w.company_id
-       where s.employee_id = ${user.id}
-         and s.status = 'PENDING'
-         and w.status in ('PENDING_APPROVER', 'PENDING_CFO')
-       order by waiting_since asc
+       where ${waitingForMe}${companyIs(query.companyId)}${searchFor(query.q)}
+       order by ${PENDING_SORT[query.sort]} ${direction(query.dir)}, w.id
+    `);
+      // The cards and the Company filter cover everything waiting, whatever is filtered
+      const { rows: everything } = await db.execute<CompanyFacet & { n: number }>(sql`
+      select c.id, c.name, count(*)::int as n
+        from workflow_steps s
+        join workflows w on w.id = s.workflow_id
+        join companies c on c.id = w.company_id
+       where ${waitingForMe}
+       group by c.id, c.name order by c.name
     `);
 
       const { rows: counts } = await db.execute<{ approved: number; rejected: number }>(sql`
@@ -85,8 +127,9 @@ export const approvalRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db
           waitingSince: iso(r.waiting_since),
           clearedBy: r.cleared_by ?? [],
         })),
+        companies: everything.map(({ id, name }) => ({ id, name })),
         stats: {
-          awaiting: rows.length,
+          awaiting: everything.reduce((sum, c) => sum + c.n, 0),
           approved: counts[0]?.approved ?? 0,
           rejected: counts[0]?.rejected ?? 0,
           period,
@@ -102,11 +145,21 @@ export const approvalRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db
     '/rejected-before-final',
     {
       onRequest: requirePermission('CFO'),
-      schema: { querystring: PageQuery, response: { 200: paginated(RejectedBeforeFinalItem) } },
+      schema: {
+        querystring: RejectedBeforeFinalQuery,
+        response: { 200: filteredPage(RejectedBeforeFinalItem) },
+      },
     },
     async (request) => {
       const user = currentUser(request);
-      const { page, pageSize } = request.query;
+      const { page, pageSize, ...query } = request.query;
+      const from = sql`
+          from workflow_steps mine
+          join workflows w on w.id = mine.workflow_id
+          join companies c on c.id = w.company_id
+          join workflow_steps r on r.workflow_id = w.id and r.status = 'REJECTED'
+         where mine.employee_id = ${user.id} and mine.is_cfo and mine.status = 'SKIPPED'`;
+      const filters = sql`${companyIs(query.companyId)}${searchFor(query.q)}`;
       const { rows } = await db.execute<{
         workflow_id: string;
         file_name: string;
@@ -119,18 +172,16 @@ export const approvalRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db
         select w.id as workflow_id, w.file_name, c.name as company_name,
                r.employee_name as rejected_by, r.position, r.remarks as reason,
                r.decided_at as rejected_at
-          from workflow_steps mine
-          join workflows w on w.id = mine.workflow_id
-          join companies c on c.id = w.company_id
-          join workflow_steps r on r.workflow_id = w.id and r.status = 'REJECTED'
-         where mine.employee_id = ${user.id} and mine.is_cfo and mine.status = 'SKIPPED'
-         order by r.decided_at desc
+        ${from}${filters}
+         order by ${REJECTED_SORT[query.sort]} ${direction(query.dir)}, w.id
          limit ${pageSize} offset ${(page - 1) * pageSize}
       `);
-      const { rows: totals } = await db.execute<{ n: number }>(sql`
-        select count(*)::int as n from workflow_steps
-         where employee_id = ${user.id} and is_cfo and status = 'SKIPPED'
-      `);
+      const { rows: totals } = await db.execute<{ n: number }>(
+        sql`select count(*)::int as n ${from}${filters}`,
+      );
+      const { rows: facets } = await db.execute<CompanyFacet>(
+        sql`select distinct c.id, c.name ${from} order by c.name`,
+      );
       return {
         items: rows.map((r) => ({
           workflowId: r.workflow_id,
@@ -144,16 +195,37 @@ export const approvalRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db
         total: totals[0]?.n ?? 0,
         page,
         pageSize,
+        companies: facets,
       };
     },
   );
 
   app.get(
     '/history',
-    { schema: { querystring: PageQuery, response: { 200: paginated(DecisionHistoryItem) } } },
+    {
+      schema: {
+        querystring: DecisionHistoryQuery,
+        response: { 200: filteredPage(DecisionHistoryItem) },
+      },
+    },
     async (request) => {
       const user = currentUser(request);
-      const { page, pageSize } = request.query;
+      const { page, pageSize, ...query } = request.query;
+      const from = sql`
+          from workflow_steps s
+          join workflows w on w.id = s.workflow_id
+          join companies c on c.id = w.company_id
+         where s.employee_id = ${user.id} and s.status in ('APPROVED', 'REJECTED')`;
+      const decidedFrom = query.decidedFrom ? new Date(query.decidedFrom) : undefined;
+      const decidedTo = query.decidedTo ? new Date(query.decidedTo) : undefined;
+      const filters = sql.join([
+        optional(query.decision !== undefined && sql`s.status = ${query.decision}`),
+        optional(query.status !== undefined && sql`w.status = ${query.status}`),
+        companyIs(query.companyId),
+        optional(decidedFrom !== undefined && sql`s.decided_at >= ${decidedFrom}`),
+        optional(decidedTo !== undefined && sql`s.decided_at <= ${decidedTo}`),
+        searchFor(query.q),
+      ]);
       const { rows } = await db.execute<{
         workflow_id: string;
         file_name: string;
@@ -165,17 +237,16 @@ export const approvalRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db
       }>(sql`
         select s.workflow_id, w.file_name, c.name as company_name, s.status as my_decision,
                s.decided_at, w.status, w.current_position
-          from workflow_steps s
-          join workflows w on w.id = s.workflow_id
-          join companies c on c.id = w.company_id
-         where s.employee_id = ${user.id} and s.status in ('APPROVED', 'REJECTED')
-         order by s.decided_at desc
+        ${from}${filters}
+         order by ${HISTORY_SORT[query.sort]} ${direction(query.dir)}, s.id
          limit ${pageSize} offset ${(page - 1) * pageSize}
       `);
-      const { rows: totals } = await db.execute<{ n: number }>(sql`
-        select count(*)::int as n from workflow_steps
-         where employee_id = ${user.id} and status in ('APPROVED', 'REJECTED')
-      `);
+      const { rows: totals } = await db.execute<{ n: number }>(
+        sql`select count(*)::int as n ${from}${filters}`,
+      );
+      const { rows: facets } = await db.execute<CompanyFacet>(
+        sql`select distinct c.id, c.name ${from} order by c.name`,
+      );
       return {
         items: rows.map((r) => ({
           workflowId: r.workflow_id,
@@ -189,6 +260,7 @@ export const approvalRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db
         total: totals[0]?.n ?? 0,
         page,
         pageSize,
+        companies: facets,
       };
     },
   );
