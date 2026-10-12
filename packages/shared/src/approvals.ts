@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { WorkflowStatus } from './enums.js';
+import { CompanyFacet } from './lists.js';
 
 // ---- Decisions (plan.md §4.8) ---------------------------------------------
 
@@ -72,7 +73,10 @@ export type ApprovalStats = z.infer<typeof ApprovalStats>;
 
 export const PendingApprovalsResponse = z.object({
   items: z.array(PendingApproval),
+  /** Unfiltered: the cards always count everything */
   stats: ApprovalStats,
+  /** Companies of everything pending, for the Company filter */
+  companies: z.array(CompanyFacet),
 });
 export type PendingApprovalsResponse = z.infer<typeof PendingApprovalsResponse>;
 

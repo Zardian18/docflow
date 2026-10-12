@@ -80,13 +80,17 @@ export async function submitWorkflow(
     );
   }
   const chain = await checkChain(db, input.approvers);
-  // Structurally impossible (Creators never have the APPROVER permission), but asserted anyway
-  if (chain.some((a) => a.employeeId === creatorId || a.employeeId === cfo.id)) {
+  // Someone with both Creator and Approver roles never approves their own document (D23)
+  if (chain.some((a) => a.employeeId === creatorId)) {
     throw new AppError(
       400,
-      'INELIGIBLE_APPROVER',
-      'The chain can’t include you or the CFO as an approver.',
+      'CREATOR_IN_CHAIN',
+      'Remove yourself from the approval chain: you can’t approve your own document.',
     );
+  }
+  // Impossible while the CFO role is exclusive (D23), but asserted anyway
+  if (chain.some((a) => a.employeeId === cfo.id)) {
+    throw new AppError(400, 'INELIGIBLE_APPROVER', 'The CFO is always the final step.');
   }
   const defaults = (await defaultApproversFor(db, [company.id])).get(company.id) ?? [];
   const chainCustomised = chainsDiffer(chain, defaults);

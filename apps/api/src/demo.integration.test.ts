@@ -25,7 +25,7 @@ describe.skipIf(!TEST_DB_URL)('seed:demo', () => {
 
   it('loads documents in every state through the real engine', async () => {
     const result = await seedDemo(db, storage);
-    expect(result.workflows).toHaveLength(7);
+    expect(result.workflows).toHaveLength(10);
     const rows = (
       await db.execute(
         sql`select status, current_position as pos, count(*)::int as n from workflows group by 1, 2 order by 1, 2`,
@@ -33,16 +33,16 @@ describe.skipIf(!TEST_DB_URL)('seed:demo', () => {
     ).rows;
     // Ordered by the status enum: one part-approved parallel step stays at position 1
     expect(rows).toEqual([
-      { status: 'PENDING_APPROVER', pos: 1, n: 2 },
-      { status: 'PENDING_APPROVER', pos: 2, n: 1 },
-      { status: 'PENDING_CFO', pos: 3, n: 1 },
+      { status: 'PENDING_APPROVER', pos: 1, n: 3 },
+      { status: 'PENDING_APPROVER', pos: 2, n: 2 },
+      { status: 'PENDING_CFO', pos: 3, n: 2 },
       { status: 'COMPLETED', pos: 3, n: 1 },
       { status: 'REJECTED', pos: 1, n: 1 },
       { status: 'REJECTED', pos: 3, n: 1 },
     ]);
     // Every stored document is a real file under the locked prefix
     const keys = [...storage.objects.keys()];
-    expect(keys).toHaveLength(7);
+    expect(keys).toHaveLength(10);
     expect(keys.every((k) => k.startsWith('documents/'))).toBe(true);
   });
 
@@ -52,8 +52,33 @@ describe.skipIf(!TEST_DB_URL)('seed:demo', () => {
     }
     const cfo = await new Client(app).login(demoEmail('cfo'), DEMO_PASSWORD);
     const pending = (await cfo.get('/v1/approvals/pending')).json();
-    expect(pending.items).toHaveLength(1);
+    expect(pending.items).toHaveLength(2);
     expect(pending.stats.rejectedBeforeFinal).toBe(1);
+  });
+
+  it('gives three people both Creator and Approver roles, never in their own chain (D23)', async () => {
+    const { rows } = await db.execute<{ email: string; permissions: string }>(sql`
+      select e.email, string_agg(er.permission::text, '+' order by er.permission) as permissions
+        from employees e join employee_roles er on er.employee_id = e.id
+       group by e.email having count(*) > 1 order by e.email`);
+    expect(rows.map((r) => r.email)).toEqual(
+      ['kabir', 'meera', 'priya'].map((who) => demoEmail(who)),
+    );
+    expect(rows.every((r) => r.permissions === 'CREATOR+APPROVER')).toBe(true);
+    const own = await db.execute(sql`
+      select count(*)::int as n from workflow_steps s join workflows w on w.id = s.workflow_id
+       where s.employee_id = w.created_by`);
+    expect(own.rows[0]).toEqual({ n: 0 });
+    // Priya sees both sides: her own submission, and Q3_Vendor_Invoice waiting for her
+    const priya = await new Client(app).login(demoEmail('priya'), DEMO_PASSWORD);
+    const mine = (await priya.get('/v1/workflows/mine')).json();
+    expect(mine.items.map((i: { fileName: string }) => i.fileName)).toEqual([
+      'IT_Support_Contract.pdf',
+    ]);
+    const pending = (await priya.get('/v1/approvals/pending')).json();
+    expect(pending.items.map((i: { fileName: string }) => i.fileName)).toEqual([
+      'Q3_Vendor_Invoice.pdf',
+    ]);
   });
 
   it('refuses to run on a database that already has employees', async () => {

@@ -51,15 +51,31 @@ export const Role = z.object({
   isSystem: z.boolean(),
   isActive: z.boolean(),
   activeEmployeeCount: z.number().int().nonnegative(),
+  /** Roles nobody may hold together with this one (mutual; Creator and Approver roles only). */
+  excludedRoleIds: z.array(z.uuid()),
 });
 export type Role = z.infer<typeof Role>;
 
-export const RoleCreate = z.object({ name: Name, permission: Permission });
-export type RoleCreate = z.infer<typeof RoleCreate>;
+const ExcludedRoleIds = z.array(z.uuid()).max(100).default([]);
+
+export const RoleCreate = z.object({
+  name: Name,
+  permission: Permission,
+  excludedRoleIds: ExcludedRoleIds,
+});
+export type RoleCreate = z.input<typeof RoleCreate>;
 
 /** A role's permission is fixed once created (create a new role instead). */
-export const RoleUpdate = z.object({ name: Name, isActive: z.boolean() });
-export type RoleUpdate = z.infer<typeof RoleUpdate>;
+export const RoleUpdate = z.object({
+  name: Name,
+  isActive: z.boolean(),
+  excludedRoleIds: ExcludedRoleIds,
+});
+export type RoleUpdate = z.input<typeof RoleUpdate>;
+
+/** One of a person's roles */
+export const HeldRole = z.object({ id: z.uuid(), name: z.string(), permission: Permission });
+export type HeldRole = z.infer<typeof HeldRole>;
 
 // ---- Employees -------------------------------------------------------------
 
@@ -75,9 +91,8 @@ export const Employee = z.object({
   name: z.string(),
   email: z.string(),
   employeeCode: z.string().nullable(),
-  roleId: z.uuid(),
-  roleName: z.string(),
-  permission: Permission,
+  /** In priority order (Creator before Approver) */
+  roles: z.array(HeldRole),
   isActive: z.boolean(),
   hasPassword: z.boolean(),
 });
@@ -87,7 +102,8 @@ export const EmployeeCreate = z.object({
   name: Name,
   email: Email,
   employeeCode: EmployeeCode.optional().default(null),
-  roleId: z.uuid('Choose a role'),
+  /** One role, or one Creator role plus one Approver role (D23) */
+  roleIds: z.array(z.uuid()).min(1, 'Choose a role').max(2, 'Choose at most two roles'),
 });
 export type EmployeeCreate = z.input<typeof EmployeeCreate>;
 

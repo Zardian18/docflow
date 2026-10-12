@@ -45,9 +45,9 @@ describe.skipIf(!TEST_DB_URL)('reset:data (D21 test-data wipe)', () => {
   it('counts what it would delete without changing anything (dry run)', async () => {
     const plan = await planReset(db, [ADMIN.toUpperCase()]);
     expect(plan.kept).toEqual([{ email: ADMIN, name: 'Anita Mehta' }]);
-    expect(plan.rows).toMatchObject({ workflows: 7, employees: 8, roles: 1, companies: 3 });
-    expect(plan.files).toBe(7);
-    expect(await total('workflows')).toBe(7);
+    expect(plan.rows).toMatchObject({ workflows: 10, employees: 9, roles: 1, companies: 3 });
+    expect(plan.files).toBe(10);
+    expect(await total('workflows')).toBe(10);
   });
 
   it('deletes everything but the kept Admin and the built-in roles, files included', async () => {
@@ -57,7 +57,7 @@ describe.skipIf(!TEST_DB_URL)('reset:data (D21 test-data wipe)', () => {
     );
 
     const result = await resetData(db, storage, [ADMIN]);
-    expect(result).toMatchObject({ deletedFiles: 7, failedFiles: 0 });
+    expect(result).toMatchObject({ deletedFiles: 10, failedFiles: 0 });
     expect(storage.objects.size).toBe(0);
     for (const table of [
       'workflows',
@@ -82,8 +82,8 @@ describe.skipIf(!TEST_DB_URL)('reset:data (D21 test-data wipe)', () => {
 
   it('is followed by the live demo seed, which keeps the real Admin in charge', async () => {
     const result = await seedDemo(db, storage, { password: 'one-time-pass', withAdmin: false });
-    expect(result.workflows).toHaveLength(7);
-    expect(await total('employees')).toBe(9);
+    expect(result.workflows).toHaveLength(10);
+    expect(await total('employees')).toBe(10);
     const api = await app();
     await new Client(api).login(demoEmail('cfo'), 'one-time-pass');
     expect(

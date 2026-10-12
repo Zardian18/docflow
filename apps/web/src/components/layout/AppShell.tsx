@@ -19,12 +19,12 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/
 import { api, errorMessage } from '@/lib/api';
 import { useSignOutLocally } from '@/lib/auth';
 import { cn } from '@/lib/utils';
-import { NAV_BY_PERMISSION } from './nav';
+import { navFor } from './nav';
 
 function NavLinks({ me, onNavigate }: { me: Me; onNavigate?: () => void }) {
   return (
     <ul className="flex flex-col gap-1">
-      {NAV_BY_PERMISSION[me.permission].map((item) => (
+      {navFor(me).map((item) => (
         <li key={item.to}>
           <NavLink
             to={item.to}

@@ -1,7 +1,8 @@
-import type { Permission } from '@docflow/shared';
+import { byPriority, primaryPermission, type HeldRole, type Permission } from '@docflow/shared';
 import { and, eq, gt, isNull, ne } from 'drizzle-orm';
 import type { DbOrTx } from '../db/client.js';
-import { employees, roles, sessions } from '../db/schema.js';
+import { employees, sessions } from '../db/schema.js';
+import { heldRoles } from '../domain/roles.js';
 import { hashToken, newToken } from './crypto.js';
 
 export interface AuthUser {
@@ -10,8 +11,28 @@ export interface AuthUser {
   name: string;
   email: string;
   employeeCode: string | null;
+  /** Role names joined, for display */
   roleName: string;
+  /** The leading permission (Creator before Approver), which picks the landing page */
   permission: Permission;
+  /** Every permission of the person's active roles, in priority order (D23) */
+  permissions: Permission[];
+}
+
+/** The signed-in shape of a person, from their active roles (none means no access). */
+export function withRoles<T extends object>(
+  person: T,
+  held: HeldRole[],
+): (T & Pick<AuthUser, 'roleName' | 'permission' | 'permissions'>) | null {
+  if (held.length === 0) return null;
+  const sorted = byPriority(held);
+  const permissions = sorted.map((r) => r.permission);
+  return {
+    ...person,
+    roleName: sorted.map((r) => r.name).join(' + '),
+    permission: primaryPermission(permissions),
+    permissions,
+  };
 }
 
 export async function createSession(
@@ -33,8 +54,8 @@ export async function createSession(
 }
 
 /**
- * Resolves a session token to its user. Permission is read from the role on every
- * request, so deactivating an employee or role takes effect immediately.
+ * Resolves a session token to its user. Permissions are read from the roles on every
+ * request, so deactivating an employee or a role takes effect immediately.
  */
 export async function loadSession(db: DbOrTx, token: string): Promise<AuthUser | null> {
   const [row] = await db
@@ -44,23 +65,22 @@ export async function loadSession(db: DbOrTx, token: string): Promise<AuthUser |
       name: employees.name,
       email: employees.email,
       employeeCode: employees.employeeCode,
-      roleName: roles.name,
-      permission: roles.permission,
+      roles: heldRoles({ activeOnly: true }),
     })
     .from(sessions)
     .innerJoin(employees, eq(employees.id, sessions.employeeId))
-    .innerJoin(roles, eq(roles.id, employees.roleId))
     .where(
       and(
         eq(sessions.tokenHash, hashToken(token)),
         isNull(sessions.revokedAt),
         gt(sessions.expiresAt, new Date()),
         eq(employees.isActive, true),
-        eq(roles.isActive, true),
       ),
     )
     .limit(1);
-  return row ?? null;
+  if (!row) return null;
+  const { roles: held, ...person } = row;
+  return withRoles(person, held);
 }
 
 export async function revokeSession(db: DbOrTx, sessionId: string): Promise<void> {

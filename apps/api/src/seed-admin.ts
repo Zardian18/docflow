@@ -8,6 +8,7 @@ import { issuePasswordLink } from './auth/password-links.js';
 import { createDb } from './db/client.js';
 import { runMigrations } from './db/migrations.js';
 import { employees, roles } from './db/schema.js';
+import { heldRoles, setRoles } from './domain/roles.js';
 
 const { values } = parseArgs({
   options: { email: { type: 'string' }, name: { type: 'string' } },
@@ -37,13 +38,13 @@ try {
   if (!adminRole) throw new Error('System Admin role missing; migrations did not run?');
 
   const [existing] = await db
-    .select({ id: employees.id, roleId: employees.roleId })
+    .select({ id: employees.id, roles: heldRoles({ activeOnly: false }) })
     .from(employees)
     .where(eq(employees.email, email.data));
 
   let employeeId: string;
   if (existing) {
-    if (existing.roleId !== adminRole.id) {
+    if (!existing.roles.some((r) => r.id === adminRole.id)) {
       throw new Error(
         `${email.data} exists but is not an Admin; change their role in the app instead`,
       );
@@ -51,11 +52,14 @@ try {
     employeeId = existing.id;
     console.log(`Admin ${email.data} already exists; issuing a new set-password link.`);
   } else {
-    const [created] = await db
-      .insert(employees)
-      .values({ name, email: email.data, roleId: adminRole.id })
-      .returning({ id: employees.id });
-    employeeId = created!.id;
+    employeeId = await db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(employees)
+        .values({ name, email: email.data })
+        .returning({ id: employees.id });
+      await setRoles(tx, created!.id, [{ id: adminRole.id, permission: 'ADMIN' }]);
+      return created!.id;
+    });
     console.log(`Created Admin ${name} <${email.data}>.`);
   }
 

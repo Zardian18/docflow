@@ -28,8 +28,12 @@ export const Me = z.object({
   name: z.string(),
   email: z.string(),
   employeeCode: z.string().nullable(),
+  /** Role names joined, for display */
   roleName: z.string(),
+  /** The leading permission: picks the landing page (Creator before Approver) */
   permission: Permission,
+  /** Everything this person may do, in priority order */
+  permissions: z.array(Permission),
 });
 export type Me = z.infer<typeof Me>;
 

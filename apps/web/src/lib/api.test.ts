@@ -20,6 +20,7 @@ describe('api client', () => {
       employeeCode: null,
       roleName: 'Admin',
       permission: 'ADMIN',
+      permissions: ['ADMIN'],
     });
     await expect(api.auth.login({ email: 'a@t.co', password: 'x' })).resolves.toMatchObject({
       permission: 'ADMIN',

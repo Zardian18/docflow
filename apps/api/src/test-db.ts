@@ -8,6 +8,7 @@ import { SESSION_COOKIE } from './plugins/auth.js';
 import { createDb, type Db } from './db/client.js';
 import { runMigrations } from './db/migrations.js';
 import { employees, roles } from './db/schema.js';
+import { setRoles } from './domain/roles.js';
 import { MemoryStorage } from './storage/memory.js';
 import type { StorageService } from './storage/storage.js';
 import { testEnv } from './test-helpers.js';
@@ -47,23 +48,34 @@ export async function createEmployee(
   opts: {
     name: string;
     email: string;
-    permission: Permission;
+    /** One permission, or Creator plus Approver (D23); uses the built-in roles */
+    permission: Permission | Permission[];
     password?: boolean;
     active?: boolean;
   },
 ) {
   passwordHash ??= hashPassword(TEST_PASSWORD);
+  const permissions = [opts.permission].flat();
   const [row] = await db
     .insert(employees)
     .values({
       name: opts.name,
       email: opts.email,
-      roleId: await systemRoleId(db, opts.permission),
       passwordHash: opts.password === false ? null : await passwordHash,
       isActive: opts.active ?? true,
-      isCfo: opts.permission === 'CFO',
+      isCfo: permissions.includes('CFO'),
     })
     .returning({ id: employees.id });
+  await setRoles(
+    db,
+    row!.id,
+    await Promise.all(
+      permissions.map(async (permission) => ({
+        id: await systemRoleId(db, permission),
+        permission,
+      })),
+    ),
+  );
   return row!.id;
 }
 

@@ -170,12 +170,12 @@ describe.skipIf(!TEST_DB_URL)('deleting records with no history (D21)', () => {
         await admin.post('/v1/roles', { name: 'Auditor', permission: 'APPROVER' })
       ).json();
       const emp = (
-        await admin.post('/v1/employees', { name: 'Aud', email: 'aud@t.co', roleId: role.id })
+        await admin.post('/v1/employees', { name: 'Aud', email: 'aud@t.co', roleIds: [role.id] })
       ).json();
       await admin.put(`/v1/employees/${emp.id}`, {
         name: 'Aud',
         email: 'aud@t.co',
-        roleId: role.id,
+        roleIds: [role.id],
         isActive: false,
       });
       expect((await admin.del(`/v1/roles/${role.id}`)).json().error).toBe('ROLE_IN_USE');

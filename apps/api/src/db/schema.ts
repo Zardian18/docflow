@@ -3,12 +3,14 @@ import {
   boolean,
   check,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
   numeric,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -38,7 +40,11 @@ export const roles = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [uniqueIndex('roles_name_lower_unique').on(sql`lower(${t.name})`)],
+  (t) => [
+    uniqueIndex('roles_name_lower_unique').on(sql`lower(${t.name})`),
+    // Target of employee_roles' (role_id, permission) key, so the copied permission can't drift
+    uniqueIndex('roles_id_permission_unique').on(t.id, t.permission),
+  ],
 );
 
 export const employees = pgTable(
@@ -50,12 +56,9 @@ export const employees = pgTable(
     name: text('name').notNull(),
     // Stored lowercase; the login identifier
     email: text('email').notNull(),
-    roleId: uuid('role_id')
-      .notNull()
-      .references(() => roles.id),
     passwordHash: text('password_hash'),
     isActive: boolean('is_active').notNull().default(true),
-    // Mirrors roles.permission = 'CFO' so the DB can enforce a single active CFO
+    // True when one of their roles is a CFO role, so the DB can enforce a single active CFO
     isCfo: boolean('is_cfo').notNull().default(false),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -66,8 +69,50 @@ export const employees = pgTable(
     uniqueIndex('employees_one_active_cfo')
       .on(t.isCfo)
       .where(sql`${t.isCfo} and ${t.isActive}`),
-    index('employees_role_idx').on(t.roleId),
     index('employees_name_lower_idx').on(sql`lower(${t.name}) text_pattern_ops`),
+  ],
+);
+
+/**
+ * A person's roles (D23): one role, or one Creator-type plus one Approver-type role. The
+ * permission is copied from the role (it never changes) so "at most one role per permission"
+ * is a unique key. Admin and CFO roles being someone's only role is enforced by the API.
+ */
+export const employeeRoles = pgTable(
+  'employee_roles',
+  {
+    employeeId: uuid('employee_id')
+      .notNull()
+      .references(() => employees.id, { onDelete: 'cascade' }),
+    roleId: uuid('role_id').notNull(),
+    permission: permissionEnum('permission').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.employeeId, t.roleId] }),
+    uniqueIndex('employee_roles_one_per_permission').on(t.employeeId, t.permission),
+    index('employee_roles_role_idx').on(t.roleId),
+    foreignKey({
+      name: 'employee_roles_role_fk',
+      columns: [t.roleId, t.permission],
+      foreignColumns: [roles.id, roles.permission],
+    }),
+  ],
+);
+
+/** Pairs of roles nobody may hold together. Stored in both directions (exclusions are mutual). */
+export const roleExclusions = pgTable(
+  'role_exclusions',
+  {
+    roleId: uuid('role_id')
+      .notNull()
+      .references(() => roles.id, { onDelete: 'cascade' }),
+    excludedRoleId: uuid('excluded_role_id')
+      .notNull()
+      .references(() => roles.id, { onDelete: 'cascade' }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.roleId, t.excludedRoleId] }),
+    check('role_exclusions_not_self', sql`${t.roleId} <> ${t.excludedRoleId}`),
   ],
 );
 

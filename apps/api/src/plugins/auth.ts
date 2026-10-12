@@ -28,11 +28,11 @@ export async function requireUser(request: FastifyRequest, _reply: FastifyReply)
   if (!request.user) throw unauthorized();
 }
 
-/** preHandler factory: 401 unless signed in, 403 unless the role carries one of `allowed`. */
+/** preHandler factory: 401 unless signed in, 403 unless one of their roles carries one of `allowed`. */
 export function requirePermission(...allowed: Permission[]) {
   return async (request: FastifyRequest, _reply: FastifyReply) => {
     if (!request.user) throw unauthorized();
-    if (!allowed.includes(request.user.permission)) throw forbidden();
+    if (!request.user.permissions.some((p) => allowed.includes(p))) throw forbidden();
   };
 }
 

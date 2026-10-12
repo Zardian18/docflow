@@ -22,13 +22,18 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { api, errorMessage } from '@/lib/api';
+import { useMe } from '@/lib/auth';
 import { CompanyPicker } from './CompanyPicker';
 import { FileDropzone, type UploadState } from './FileDropzone';
 
 type InvoiceInput = z.input<typeof InvoiceFields>;
 
-const stepsFromCompany = (company: CompanyOption): ChainStep[] =>
-  groupBySteps(company.approvers).map((group) => ({
+/**
+ * The company's default chain without the person submitting: someone with both Creator and
+ * Approver roles never approves their own document (D23). A step left empty disappears.
+ */
+const stepsFromCompany = (company: CompanyOption, myId: string | undefined): ChainStep[] =>
+  groupBySteps(company.approvers.filter((a) => a.employeeId !== myId)).map((group) => ({
     key: newStepKey(),
     people: group.map((a) => ({ employeeId: a.employeeId, name: a.name })),
   }));
@@ -66,7 +71,7 @@ function BeforeYouSubmit({
     <aside className="bg-card flex flex-col gap-4 rounded-xl border p-5 lg:sticky lg:top-6">
       <h2 className="text-sm font-semibold">Before you submit</h2>
       <ul className="text-muted-foreground flex list-disc flex-col gap-2.5 pl-4 text-[13px] leading-relaxed">
-        <li>The Creator role only uploads. It does not approve.</li>
+        <li>You never approve your own document, even if you also have an Approver role.</li>
         <li>The CFO is a fixed, global approver and is always last.</li>
         <li>
           Chain changes here apply to this document only. The Company Master default is untouched.
@@ -88,6 +93,7 @@ function BeforeYouSubmit({
 export function NewSubmissionPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const myId = useMe().data?.id;
   const companyFieldId = useId();
   const [upload, setUpload] = useState<UploadState>({ kind: 'empty' });
   const [company, setCompany] = useState<CompanyOption | null>(null);
@@ -117,8 +123,9 @@ export function NewSubmissionPage() {
   const customised = company !== null && chainKey(steps) !== defaultKey;
   const problem = chainProblem(steps);
 
+  const leftOut = company?.approvers.some((a) => a.employeeId === myId) ?? false;
   const pickCompany = (c: CompanyOption) => {
-    const fresh = stepsFromCompany(c);
+    const fresh = stepsFromCompany(c, myId);
     setCompany(c);
     setSteps(fresh);
     setDefaultKey(chainKey(fresh));
@@ -214,6 +221,12 @@ export function NewSubmissionPage() {
                     <RotateCcw aria-hidden /> Reset to Company Default
                   </Button>
                 </div>
+                {leftOut && (
+                  <p className="bg-primary-soft text-foreground mb-4 rounded-lg px-3 py-2 text-[13px]">
+                    You’re in {company.name}’s default approval chain, so you’ve been left out of
+                    this document’s chain: nobody approves their own document.
+                  </p>
+                )}
                 <ChainBuilder
                   steps={steps}
                   onChange={setSteps}

@@ -33,7 +33,7 @@ No critical issue was found, and there was no way to reach another person's docu
 
 ## Endpoint × permission matrix
 This is enforced by `apps/api/src/permissions.integration.test.ts`:
-- **Callers:** every endpoint is called signed out and as each of the four permissions.
+- **Callers:** every endpoint is called signed out, as each of the four permissions, and as someone holding both a Creator and an Approver role (D23), who may call what either may.
 - **Refusals:** a caller who isn't allowed must get 401 when signed out and 403 when signed in with the wrong permission. An allowed caller must get past the guard (it may still get 400/404/409).
 - **Completeness:** the test also fails if the API serves a route this table doesn't list.
 

@@ -1,21 +1,49 @@
-import type { PendingApproval, RejectedBeforeFinalItem } from '@docflow/shared';
+import type {
+  PendingApproval,
+  PendingQuery,
+  RejectedBeforeFinalItem,
+  RejectedBeforeFinalQuery,
+} from '@docflow/shared';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { formatDistanceToNowStrict } from 'date-fns';
 import { ArrowRight } from 'lucide-react';
-import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { Pagination } from '@/components/ListControls';
+import { ListFilterBar } from '@/components/ListFilters';
 import { PageBody, PageHeader } from '@/components/PageHeader';
 import { ResponsiveTable, type Column } from '@/components/ResponsiveTable';
 import { StatCard } from '@/components/StatCard';
 import { EmptyState } from '@/components/States';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
+import { useListFilters } from '@/lib/list-filters';
 import { formatDate } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { REVIEWER, type ReviewerKind } from './reviewer';
 
 type CfoView = 'pending' | 'rejected';
+
+// Everything pending has the same status, so these lists have no status filter
+const PENDING_SPEC = {
+  sorts: [
+    { value: 'waiting', label: 'Waiting since', kind: 'date' },
+    { value: 'document', label: 'Document', kind: 'text' },
+    { value: 'company', label: 'Company', kind: 'text' },
+  ],
+  defaultSort: 'waiting',
+  // Oldest first: what has waited longest comes first
+  defaultDir: 'asc',
+} as const;
+
+const REJECTED_SPEC = {
+  sorts: [
+    { value: 'rejected', label: 'Rejected on', kind: 'date' },
+    { value: 'document', label: 'Document', kind: 'text' },
+    { value: 'company', label: 'Company', kind: 'text' },
+  ],
+  defaultSort: 'rejected',
+  defaultDir: 'desc',
+} as const;
 
 /** CFO dashboard tabs; the chosen tab lives in the URL (?view=rejected) so it survives refresh. */
 function ViewTabs({
@@ -69,10 +97,19 @@ function ViewTabs({
 
 /** D22: documents an approver rejected before they reached the CFO. Read-only. */
 function RejectedBeforeFinalList() {
-  const [page, setPage] = useState(1);
+  const state = useListFilters(REJECTED_SPEC);
+  const { filters } = state;
+  const query: RejectedBeforeFinalQuery = {
+    page: filters.page,
+    pageSize: 20,
+    companyId: filters.companyId,
+    q: filters.q,
+    sort: filters.sort as RejectedBeforeFinalQuery['sort'],
+    dir: filters.dir,
+  };
   const list = useQuery({
-    queryKey: ['approvals', 'rejected-before-final', page],
-    queryFn: ({ signal }) => api.approvals.rejectedBeforeFinal({ page, pageSize: 20 }, signal),
+    queryKey: ['approvals', 'rejected-before-final', query],
+    queryFn: ({ signal }) => api.approvals.rejectedBeforeFinal(query, signal),
     placeholderData: keepPreviousData,
   });
   const columns: Column<RejectedBeforeFinalItem>[] = [
@@ -80,6 +117,7 @@ function RejectedBeforeFinalList() {
       key: 'document',
       header: 'Document',
       primary: true,
+      sortKey: 'document',
       cell: (r) => (
         <Link
           to={`/final-approvals/${r.workflowId}`}
@@ -89,7 +127,7 @@ function RejectedBeforeFinalList() {
         </Link>
       ),
     },
-    { key: 'company', header: 'Company', cell: (r) => r.companyName },
+    { key: 'company', header: 'Company', sortKey: 'company', cell: (r) => r.companyName },
     {
       key: 'by',
       header: 'Rejected By',
@@ -110,12 +148,21 @@ function RejectedBeforeFinalList() {
     {
       key: 'when',
       header: 'Rejected On',
+      sortKey: 'rejected',
       className: 'whitespace-nowrap',
       cell: (r) => <span className="text-muted-foreground">{formatDate(r.rejectedAt)}</span>,
     },
   ];
   return (
     <>
+      <ListFilterBar
+        key={state.barKey}
+        state={state}
+        spec={REJECTED_SPEC}
+        companies={list.data?.companies}
+        total={list.data?.total}
+        noun={['document', 'documents']}
+      />
       <ResponsiveTable
         caption="Rejected before final approval"
         columns={columns}
@@ -124,39 +171,53 @@ function RejectedBeforeFinalList() {
         isPending={list.isPending}
         error={list.error}
         onRetry={() => list.refetch()}
+        sort={{ key: filters.sort, dir: filters.dir }}
+        onSort={state.onSort}
         empty={
-          <EmptyState title="No early rejections">
-            Documents an approver rejects before they reach you will be listed here.
-          </EmptyState>
+          state.active ? (
+            <EmptyState title="No documents match these filters">
+              Change or clear the filters to see more.
+            </EmptyState>
+          ) : (
+            <EmptyState title="No early rejections">
+              Documents an approver rejects before they reach you will be listed here.
+            </EmptyState>
+          )
         }
       />
       {list.data && (
         <Pagination
-          page={page}
+          page={filters.page}
           pageSize={list.data.pageSize}
           total={list.data.total}
-          onPage={setPage}
+          onPage={state.setPage}
         />
       )}
     </>
   );
 }
 
-/** Screen 06 (approver) and screen 09 (CFO). */
-export function PendingPage({ kind }: { kind: ReviewerKind }) {
-  const copy = REVIEWER[kind];
-  const [params, setParams] = useSearchParams();
-  const view: CfoView =
-    kind === 'cfo' && params.get('view') === 'rejected' ? 'rejected' : 'pending';
-  const setView = (v: CfoView) => setParams(v === 'rejected' ? { view: v } : {}, { replace: true });
-  const pending = useQuery({
-    queryKey: ['approvals', 'pending'],
-    queryFn: ({ signal }) => api.approvals.pending(signal),
+function usePending(query: PendingQuery = {}) {
+  return useQuery({
+    queryKey: ['approvals', 'pending', query],
+    queryFn: ({ signal }) => api.approvals.pending(query, signal),
+    placeholderData: keepPreviousData,
     // Someone else's decision can put a document in front of me; keep the list fresh
     refetchOnWindowFocus: true,
     refetchInterval: 60_000,
   });
-  const stats = pending.data?.stats;
+}
+
+function PendingList({ kind }: { kind: ReviewerKind }) {
+  const copy = REVIEWER[kind];
+  const state = useListFilters(PENDING_SPEC);
+  const { filters } = state;
+  const pending = usePending({
+    companyId: filters.companyId,
+    q: filters.q,
+    sort: filters.sort as PendingQuery['sort'],
+    dir: filters.dir,
+  });
 
   const review: Column<PendingApproval> = {
     key: 'review',
@@ -176,9 +237,10 @@ export function PendingPage({ kind }: { kind: ReviewerKind }) {
       key: 'document',
       header: 'Document',
       primary: true,
+      sortKey: 'document',
       cell: (p) => <span className="font-medium break-all">{p.fileName}</span>,
     },
-    { key: 'company', header: 'Company', cell: (p) => p.companyName },
+    { key: 'company', header: 'Company', sortKey: 'company', cell: (p) => p.companyName },
     kind === 'cfo'
       ? {
           key: 'cleared',
@@ -206,6 +268,7 @@ export function PendingPage({ kind }: { kind: ReviewerKind }) {
     {
       key: 'waiting',
       header: 'Waiting Since',
+      sortKey: 'waiting',
       className: 'whitespace-nowrap',
       cell: (p) => (
         <span className="text-status-amber" title={new Date(p.waitingSince).toLocaleString()}>
@@ -215,6 +278,53 @@ export function PendingPage({ kind }: { kind: ReviewerKind }) {
     },
     review,
   ];
+
+  return (
+    <>
+      <ListFilterBar
+        key={state.barKey}
+        state={state}
+        spec={PENDING_SPEC}
+        companies={pending.data?.companies}
+        total={pending.data?.items.length}
+        noun={['document', 'documents']}
+      />
+      <ResponsiveTable
+        caption={copy.pendingTitle}
+        columns={columns}
+        rows={pending.data?.items}
+        rowKey={(p) => p.workflowId}
+        isPending={pending.isPending}
+        error={pending.error}
+        onRetry={() => pending.refetch()}
+        sort={{ key: filters.sort, dir: filters.dir }}
+        onSort={state.onSort}
+        empty={
+          state.active ? (
+            <EmptyState title="No documents match these filters">
+              Change or clear the filters to see more.
+            </EmptyState>
+          ) : (
+            <EmptyState title={copy.emptyTitle}>{copy.emptyBody}</EmptyState>
+          )
+        }
+      />
+    </>
+  );
+}
+
+/** Screen 06 (approver) and screen 09 (CFO). */
+export function PendingPage({ kind }: { kind: ReviewerKind }) {
+  const copy = REVIEWER[kind];
+  const [params, setParams] = useSearchParams();
+  const view: CfoView =
+    kind === 'cfo' && params.get('view') === 'rejected' ? 'rejected' : 'pending';
+  // Each tab has its own filters, so switching tabs starts with none
+  const setView = (v: CfoView) => setParams(v === 'rejected' ? { view: v } : {}, { replace: true });
+  // The cards always count everything, whatever the list below is filtered to (unfiltered,
+  // this is the same query as the list, so it is fetched once)
+  const stats = usePending({ sort: PENDING_SPEC.defaultSort, dir: PENDING_SPEC.defaultDir }).data
+    ?.stats;
 
   return (
     <>
@@ -233,20 +343,7 @@ export function PendingPage({ kind }: { kind: ReviewerKind }) {
             rejectedCount={stats?.rejectedBeforeFinal}
           />
         )}
-        {view === 'rejected' ? (
-          <RejectedBeforeFinalList />
-        ) : (
-          <ResponsiveTable
-            caption={copy.pendingTitle}
-            columns={columns}
-            rows={pending.data?.items}
-            rowKey={(p) => p.workflowId}
-            isPending={pending.isPending}
-            error={pending.error}
-            onRetry={() => pending.refetch()}
-            empty={<EmptyState title={copy.emptyTitle}>{copy.emptyBody}</EmptyState>}
-          />
-        )}
+        {view === 'rejected' ? <RejectedBeforeFinalList /> : <PendingList kind={kind} />}
       </PageBody>
     </>
   );

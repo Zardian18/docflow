@@ -351,7 +351,7 @@ describe.skipIf(!TEST_DB_URL)('approval engine (plan.md §4.8)', () => {
       await clients.admin!.put(`/v1/employees/${ids.a}`, {
         name: 'Ann',
         email: EMAILS.a,
-        roleId: approverRole,
+        roleIds: [approverRole],
         isActive: false,
       });
       expect((await decide('a', wf, 'APPROVE')).statusCode).toBe(401);

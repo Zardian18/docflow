@@ -4,6 +4,7 @@ import {
   auditEvents,
   companies,
   companyDefaultApprovers,
+  employeeRoles,
   employees,
   passwordTokens,
   roles,
@@ -97,7 +98,7 @@ export async function deleteRole(db: Db, id: string): Promise<void> {
   if (!role) throw notFound('Role');
   if (role.isSystem) throw conflict('SYSTEM_ROLE', 'Built-in roles cannot be deleted.');
   const holders = await countOf(
-    db.select({ n: count() }).from(employees).where(eq(employees.roleId, id)),
+    db.select({ n: count() }).from(employeeRoles).where(eq(employeeRoles.roleId, id)),
   );
   if (holders > 0) {
     throw conflict(
