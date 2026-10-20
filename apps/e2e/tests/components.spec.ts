@@ -1,15 +1,23 @@
 import { expect, test } from '@playwright/test';
-import { expectAccessible, openOrder, signedIn } from './helpers';
+import { expectAccessible, openOrder, ORDERS, signedIn } from './helpers';
 
-// ORD-0005 in the demo: every component delivered except one
+// In the demo, one component of this order is dispatched but not yet delivered (D27)
 test('the last Deliver Date opens Production QA; the change is in the row history', async ({
   browser,
 }) => {
   const { context, page } = await signedIn(browser, 'kabir');
-  await openOrder(page, 'ORD-0005');
+  await openOrder(page, ORDERS.delivery);
   await page.getByRole('tab', { name: 'Materials' }).click();
-  const waiting = page.getByRole('row').filter({ hasText: 'Waiting' }).first();
+  const waiting = page
+    .getByRole('row')
+    .filter({ hasText: 'Dispatched' })
+    .filter({ visible: true })
+    .first();
   await expect(waiting).toBeVisible();
+  // The day counts: ordering took some days, delivery is still counting
+  await expect(waiting).toContainText(/took \d+ days?/);
+  await expect(waiting).toContainText(/counting/);
+  await expect(waiting).toContainText('Still needed: Deliver Date');
   await expectAccessible(page, 'component tables');
   await waiting.getByRole('button', { name: /^Edit / }).click();
   const dialog = page.getByRole('dialog');
@@ -20,7 +28,9 @@ test('the last Deliver Date opens Production QA; the change is in the row histor
   await expectAccessible(page, 'component dialog');
   await dialog.getByRole('button', { name: 'Save' }).click();
   await expect(dialog).toBeHidden();
-  await expect(page.getByRole('row').filter({ hasText: 'Waiting' })).toHaveCount(0);
+  await expect(
+    page.getByRole('row').filter({ hasText: 'Dispatched' }).filter({ visible: true }),
+  ).toHaveCount(0);
 
   // History shows who changed what, and why
   await page

@@ -1,9 +1,14 @@
 import {
   COMPONENT_FIELD_LABEL,
+  COMPONENT_REQUIRED_FIELDS,
+  COMPONENT_STATUS_LABEL,
   TAG_LABEL,
   TAGS,
   type Component,
+  type ComponentField,
   type ComponentInput,
+  type ComponentStatus,
+  type DayCount,
   type Tag,
 } from '@docflow/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -33,8 +38,37 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { api, errorMessage } from '@/lib/api';
-import { formatDateTime } from '@/lib/format';
-import { clockText } from '@/lib/labels';
+import { formatDate, formatDateTime } from '@/lib/format';
+import { clockText, days } from '@/lib/labels';
+import type { PillTone } from '@/components/StatusPill';
+
+const STATUS_TONE: Record<ComponentStatus, PillTone> = {
+  NOT_ORDERED: 'grey',
+  ORDERED: 'blue',
+  DISPATCHED: 'amber',
+  DELIVERED: 'green',
+};
+
+/** What the hand-over to Production needs on every row (D27); the rest is optional */
+const required = (k: ComponentField) =>
+  (COMPONENT_REQUIRED_FIELDS as readonly ComponentField[]).includes(k);
+const labelOf = (k: ComponentField) =>
+  `${COMPONENT_FIELD_LABEL[k]}${required(k) ? ' (needed for hand-over)' : ''}`;
+
+/** A day count that is still running, or how long it took once it ended */
+function DayCountCell({ count, since }: { count: DayCount; since: string }) {
+  if (!count) return <span className="text-muted-foreground">—</span>;
+  return count.running ? (
+    <span className="flex flex-col">
+      <span className="text-status-amber font-medium">{days(count.days)}</span>
+      <span className="text-muted-foreground text-xs">since {since}, counting</span>
+    </span>
+  ) : (
+    <span className="flex flex-col">
+      <span className="font-medium">took {days(count.days)}</span>
+    </span>
+  );
+}
 
 type Draft = Required<Omit<ComponentInput, 'comment'>> & { comment: string };
 
@@ -113,7 +147,7 @@ function ComponentDialog({
   ) => (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor={`${id}-${k}`} className="text-muted-foreground text-[13px] font-normal">
-        {COMPONENT_FIELD_LABEL[k]}
+        {labelOf(k)}
       </Label>
       <Input
         id={`${id}-${k}`}
@@ -126,7 +160,7 @@ function ComponentDialog({
   const dateField = (k: 'poDate' | 'dispatchDate' | 'deliverDate') => (
     <div className="flex flex-col gap-1.5">
       <Label htmlFor={`${id}-${k}`} className="text-muted-foreground text-[13px] font-normal">
-        {COMPONENT_FIELD_LABEL[k]}
+        {labelOf(k)}
       </Label>
       <Input
         id={`${id}-${k}`}
@@ -144,8 +178,9 @@ function ComponentDialog({
             {row ? `Edit ${row.name}` : `Add a component to ${productName}`}
           </DialogTitle>
           <DialogDescription>
-            Every change is kept in the row’s history with who made it and when. A Deliver Date
-            marks the component delivered.
+            A name and type are enough to list a component; fill in the rest as it is ordered,
+            dispatched and delivered. Production can start once every component has its dates,
+            Challan No. and LR Details. Every change is kept in the row’s history.
           </DialogDescription>
         </DialogHeader>
         <form
@@ -303,13 +338,17 @@ export function ComponentTablesView({ orderId }: { orderId: string }) {
   if (tables.error) return <ErrorState error={tables.error} onRetry={() => tables.refetch()} />;
   const data = tables.data!;
   const cell = 'border-b px-3 py-2 align-top whitespace-nowrap';
+  const productionDay = data.trackerA ? formatDate(data.trackerA.since) : '';
   return (
     <div className="flex flex-col gap-6">
       <p className="text-muted-foreground text-[13px]">
         Production started {clockText(data.trackerA)}. Order started {clockText(data.trackerB)}.
         {data.editable
           ? ' You can edit these tables until Production hands over to Logistics.'
-          : ''}
+          : ''}{' '}
+        List every component of a product, even before ordering it. “Ordered” needs at least one
+        component of that type, and Production can start once every component has its dates, Challan
+        No. and LR Details.
       </p>
       {data.products.length === 0 && (
         <EmptyState title="No products yet">Products are listed with the PI.</EmptyState>
@@ -321,11 +360,22 @@ export function ComponentTablesView({ orderId }: { orderId: string }) {
           className="bg-card rounded-xl border"
         >
           <div className="flex flex-wrap items-center justify-between gap-2 border-b p-4">
-            <h3 id={`product-${p.id}`} className="flex items-center gap-2 text-sm font-semibold">
+            <h3
+              id={`product-${p.id}`}
+              className="flex flex-wrap items-center gap-2 text-sm font-semibold"
+            >
               {p.name}
               <StatusPill tone={p.total > 0 && p.delivered === p.total ? 'green' : 'amber'}>
                 {p.delivered} of {p.total} delivered
               </StatusPill>
+              {(() => {
+                const ready = p.components.filter((c) => c.missing.length === 0).length;
+                return (
+                  <StatusPill tone={p.total > 0 && ready === p.total ? 'green' : 'grey'}>
+                    {ready} of {p.total} ready for Production
+                  </StatusPill>
+                );
+              })()}
             </h3>
             {data.editable && (
               <Button
@@ -340,7 +390,9 @@ export function ComponentTablesView({ orderId }: { orderId: string }) {
           {p.components.length === 0 ? (
             <p className="text-muted-foreground p-4 text-[13px]">No components yet.</p>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="relative overflow-x-auto">
+              {/* relative: the sr-only header label is absolutely positioned and must be
+                  clipped by this box, not widen the whole page (D27, item 6) */}
               <table className="w-full text-[13px] tabular-nums">
                 <caption className="sr-only">Components of {p.name}</caption>
                 <thead className="bg-surface-subtle text-muted-foreground text-left text-xs">
@@ -349,10 +401,12 @@ export function ComponentTablesView({ orderId }: { orderId: string }) {
                       'Sr.',
                       'Prod Name',
                       'Type',
+                      'Status',
+                      'Ordering delay',
+                      'Delivery time',
                       'PO Qty',
                       'Order Qty',
                       'PO Date',
-                      'Days since PO',
                       'Dispatch',
                       'Deliver',
                       'LR Details',
@@ -377,18 +431,30 @@ export function ComponentTablesView({ orderId }: { orderId: string }) {
                       <td className={cell}>{c.srNo}</td>
                       <td className={cell + ' font-medium'}>{c.name}</td>
                       <td className={cell}>{TAG_LABEL[c.kind]}</td>
+                      <td className={cell}>
+                        <span className="flex flex-col items-start gap-1">
+                          <StatusPill tone={STATUS_TONE[c.status]}>
+                            {COMPONENT_STATUS_LABEL[c.status]}
+                          </StatusPill>
+                          {c.status !== 'NOT_ORDERED' && c.missing.length > 0 && (
+                            <span className="text-status-amber text-xs whitespace-normal">
+                              Still needed:{' '}
+                              {c.missing.map((f) => COMPONENT_FIELD_LABEL[f]).join(', ')}
+                            </span>
+                          )}
+                        </span>
+                      </td>
+                      <td className={cell}>
+                        <DayCountCell count={c.orderingDays} since={productionDay} />
+                      </td>
+                      <td className={cell}>
+                        <DayCountCell count={c.deliveryDays} since={c.poDate ?? ''} />
+                      </td>
                       <td className={cell}>{c.poQuantity ?? '—'}</td>
                       <td className={cell}>{c.orderQuantity ?? '—'}</td>
                       <td className={cell}>{c.poDate ?? '—'}</td>
-                      <td className={cell}>{c.daysSincePo ?? (c.delivered ? 'Delivered' : '—')}</td>
                       <td className={cell}>{c.dispatchDate ?? '—'}</td>
-                      <td className={cell}>
-                        {c.deliverDate ? (
-                          <StatusPill tone="green">{c.deliverDate}</StatusPill>
-                        ) : (
-                          <StatusPill tone="amber">Waiting</StatusPill>
-                        )}
-                      </td>
+                      <td className={cell}>{c.deliverDate ?? '—'}</td>
                       <td className={cell}>{c.lrDetails ?? '—'}</td>
                       <td className={cell}>{c.challanNo ?? '—'}</td>
                       <td className={cell + ' max-w-56 whitespace-normal'}>

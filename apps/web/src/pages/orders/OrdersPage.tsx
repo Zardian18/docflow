@@ -20,7 +20,7 @@ import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 import { useMe } from '@/lib/auth';
 import { formatDate } from '@/lib/format';
-import { clockText, ORDER_TONE, orderRef, orderStatusLabel, PHASE_LABEL } from '@/lib/labels';
+import { clockText, ORDER_TONE, orderStatusLabel, PHASE_LABEL } from '@/lib/labels';
 import { dayEnd, dayStart } from '@/lib/list-filters';
 
 const STAGES = CURRENT_TEMPLATE.steps.map((s) => ({ value: s.key, label: s.title }));
@@ -43,7 +43,6 @@ export function OrdersPage() {
       : undefined,
     phase: get('phase') ? Number(get('phase')) : undefined,
     buyerId: get('buyerId'),
-    companyId: get('companyId'),
     stepKey: get('stepKey'),
     createdFrom: dayStart(get('from')),
     createdTo: dayEnd(get('to')),
@@ -69,10 +68,6 @@ export function OrdersPage() {
     queryKey: ['lookup-buyers'],
     queryFn: ({ signal }) => api.lookups.buyers('', signal),
   });
-  const companies = useQuery({
-    queryKey: ['lookup-companies'],
-    queryFn: ({ signal }) => api.lookups.companies('', signal),
-  });
 
   const [q, setQ] = useState(query.q ?? '');
   const debounced = useDebounced(q.trim(), 300);
@@ -80,8 +75,8 @@ export function OrdersPage() {
     if ((query.q ?? '') !== debounced) update({ q: debounced || undefined });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only react to typing
   }, [debounced]);
-  const filtered = ['status', 'phase', 'buyerId', 'companyId', 'stepKey', 'from', 'to', 'q'].some(
-    (k) => params.get(k),
+  const filtered = ['status', 'phase', 'buyerId', 'stepKey', 'from', 'to', 'q'].some((k) =>
+    params.get(k),
   );
 
   const columns: Column<OrderSummary>[] = [
@@ -92,12 +87,11 @@ export function OrdersPage() {
       sortKey: 'number',
       cell: (o) => (
         <Link to={`/orders/${o.id}`} className="font-medium hover:underline">
-          {orderRef(o.number)}
+          {o.ref}
         </Link>
       ),
     },
     { key: 'buyer', header: 'Buyer', sortKey: 'buyer', cell: (o) => o.buyerName },
-    { key: 'company', header: 'Company', cell: (o) => o.company.name },
     {
       key: 'status',
       header: 'Status',
@@ -190,13 +184,6 @@ export function OrdersPage() {
               value={query.buyerId}
               choices={(buyers.data ?? []).map((b) => ({ value: b.id, label: b.name }))}
               onChange={(buyerId) => update({ buyerId })}
-            />
-            <ChoiceSelect
-              label="Company"
-              anyLabel="All companies"
-              value={query.companyId}
-              choices={(companies.data ?? []).map((c) => ({ value: c.id, label: c.name }))}
-              onChange={(companyId) => update({ companyId })}
             />
             <ChoiceSelect
               label="Stage now"

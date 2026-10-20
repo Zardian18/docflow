@@ -87,9 +87,20 @@ export function watchConsole(page: Page) {
   return { assertClean: () => expect(problems, 'console errors').toEqual([]) };
 }
 
+/**
+ * Demo order numbers (apps/api/src/demo/seed.ts): the Creator renamed each order to its PI
+ * number, except the first, which hasn't reached the PI yet (D27).
+ */
+export const ORDERS = {
+  cbm: 'ORD-0001',
+  delivery: 'THC/PI/26-27/0044',
+  qa: 'TPE/PI/26-27/0045',
+  bol: 'THC/PI/26-27/0047',
+} as const;
+
 /** Opens an order from the Orders list by its number, as a person would */
 export async function openOrder(page: Page, ref: string) {
-  await page.goto(`/orders?q=${ref}`);
+  await page.goto(`/orders?q=${encodeURIComponent(ref)}`);
   await page.getByRole('link', { name: ref }).filter({ visible: true }).first().click();
   await page.waitForURL(/\/orders\/[0-9a-f-]{36}/);
 }

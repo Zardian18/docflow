@@ -1,5 +1,12 @@
 import { expect, test } from '@playwright/test';
-import { expectAccessible, signedIn, watchConsole, type Person } from './helpers';
+import {
+  expectAccessible,
+  openOrder,
+  ORDERS,
+  signedIn,
+  watchConsole,
+  type Person,
+} from './helpers';
 
 /** WCAG 2.1 A/AA scan (axe) of every screen, as the person who uses it, at desktop and phone widths. */
 const SCREENS: Array<{ who: Person | null; path: string; wait: string | RegExp }> = [
@@ -11,15 +18,15 @@ const SCREENS: Array<{ who: Person | null; path: string; wait: string | RegExp }
   { who: 'dev', path: '/work', wait: 'All my work' },
   { who: 'vikram', path: '/work', wait: 'Named on orders' },
   { who: 'admin', path: '/orders', wait: /ORD-0001/ },
-  { who: 'rohan', path: '/orders/new', wait: 'Named people' },
+  { who: 'rohan', path: '/orders/new', wait: 'Chain for this order' },
   { who: 'admin', path: '/admin/employees', wait: 'Kabir Singh' },
-  { who: 'admin', path: '/admin/companies', wait: 'Trident Pharma Exports' },
-  { who: 'admin', path: '/admin/companies/new', wait: 'Named people' },
   { who: 'admin', path: '/admin/buyers', wait: 'Andes Pharma' },
+  { who: 'admin', path: '/admin/buyers/new', wait: 'Default chain' },
+  { who: 'rohan', path: '/admin/buyers', wait: 'Andes Pharma' },
   { who: 'admin', path: '/account/password', wait: /password/i },
 ];
 
-// ORD-0008 is at sea with loops, votes and checkpoints: every part of the order page shows
+// The BoL order is at sea with loops, votes and checkpoints: every part of the order page shows
 const ORDER_TABS = ['Chain', 'Materials', 'History', 'Details'];
 
 for (const width of [1280, 375]) {
@@ -44,14 +51,19 @@ for (const width of [1280, 375]) {
     test('the order page, every tab', async ({ browser }) => {
       const { context, page } = await signedIn(browser, 'admin');
       await page.setViewportSize({ width, height: 900 });
-      await page.goto('/orders?q=ORD-0008');
-      await page.getByRole('link', { name: 'ORD-0008' }).filter({ visible: true }).first().click();
-      await page.waitForURL(/\/orders\/[0-9a-f-]{36}/);
+      await openOrder(page, ORDERS.bol);
       for (const tab of ORDER_TABS) {
         await page.getByRole('tab', { name: tab }).click();
         await page.waitForLoadState('networkidle');
         await expect(page.getByRole('main')).not.toBeEmpty();
         await expectAccessible(page, `order ${tab} @${width}`);
+        // Wide tables scroll inside their own box; the page itself never scrolls sideways
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+          ),
+          `no sideways page scroll on ${tab} @${width}`,
+        ).toBe(true);
       }
       await context.close();
     });

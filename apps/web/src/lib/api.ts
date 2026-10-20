@@ -1,8 +1,7 @@
 import {
   ApiErrorBody,
   Buyer,
-  Company,
-  CompanyOption,
+  BuyerOption,
   ComponentChange,
   ComponentTables,
   Employee,
@@ -20,7 +19,6 @@ import {
   type BuyerUpsert,
   type Capability,
   type ChangePasswordRequest,
-  type CompanyUpsert,
   type ComponentInput,
   type EmployeeCreate,
   type EmployeeListQuery,
@@ -29,6 +27,7 @@ import {
   type LoginRequest,
   type OrderCreate,
   type OrderListQuery,
+  type OrderSlotUpdate,
   type PresignRequest,
   type SetPasswordRequest,
   type Slot,
@@ -150,20 +149,10 @@ export const api = {
       ),
   },
 
-  companies: {
-    list: (query: Partial<ListQuery>, signal?: AbortSignal) =>
-      get(paginated(Company), `/v1/companies?${listParams(query)}`, signal),
-    get: (id: string, signal?: AbortSignal) => get(Company, `/v1/companies/${id}`, signal),
-    create: (body: CompanyUpsert) =>
-      request('/v1/companies', { method: 'POST', body }).then((d) => Company.parse(d)),
-    remove: (id: string) => request(`/v1/companies/${id}`, { method: 'DELETE' }),
-    update: (id: string, body: CompanyUpsert) =>
-      request(`/v1/companies/${id}`, { method: 'PUT', body }).then((d) => Company.parse(d)),
-  },
-
   buyers: {
     list: (query: Partial<ListQuery>, signal?: AbortSignal) =>
       get(paginated(Buyer), `/v1/buyers?${listParams(query)}`, signal),
+    get: (id: string, signal?: AbortSignal) => get(Buyer, `/v1/buyers/${id}`, signal),
     create: (body: BuyerUpsert) =>
       request('/v1/buyers', { method: 'POST', body }).then((d) => Buyer.parse(d)),
     update: (id: string, body: BuyerUpsert) =>
@@ -174,16 +163,10 @@ export const api = {
   lookups: {
     people: (capability: Capability, q: string, signal?: AbortSignal) =>
       get(PersonOption.array(), `/v1/lookups/people?${listParams({ capability, q })}`, signal),
-    companies: (q: string, signal?: AbortSignal) =>
-      get(CompanyOption.array(), `/v1/lookups/companies?${listParams({ q })}`, signal),
-    companySlots: (id: string, signal?: AbortSignal) =>
-      get(SlotAssignment.array(), `/v1/lookups/companies/${id}/slots`, signal),
+    buyerSlots: (id: string, signal?: AbortSignal) =>
+      get(SlotAssignment.array(), `/v1/lookups/buyers/${id}/slots`, signal),
     buyers: (q: string, signal?: AbortSignal) =>
-      get(
-        z.array(z.object({ id: z.uuid(), name: z.string(), country: z.string().nullable() })),
-        `/v1/lookups/buyers?${listParams({ q })}`,
-        signal,
-      ),
+      get(BuyerOption.array(), `/v1/lookups/buyers?${listParams({ q })}`, signal),
   },
 
   orders: {
@@ -202,6 +185,10 @@ export const api = {
       id: string,
       body: { slot: Slot; fromEmployeeId: string; toEmployeeId: string; reason: string },
     ) => request(`/v1/orders/${id}/replace-person`, { method: 'POST', body }),
+    rename: (id: string, ref: string) =>
+      request(`/v1/orders/${id}/ref`, { method: 'PUT', body: { ref } }),
+    updateSlot: (id: string, slot: Slot, body: OrderSlotUpdate) =>
+      request(`/v1/orders/${id}/slots/${slot}`, { method: 'PUT', body }),
     components: (id: string, signal?: AbortSignal) =>
       get(ComponentTables, `/v1/orders/${id}/components`, signal),
   },

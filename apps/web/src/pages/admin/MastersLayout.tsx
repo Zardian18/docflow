@@ -1,10 +1,10 @@
 import { NavLink } from 'react-router';
+import { useMe } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 
 const TABS = [
-  { label: 'Employees', to: '/admin/employees' },
-  { label: 'Companies', to: '/admin/companies' },
-  { label: 'Buyers', to: '/admin/buyers' },
+  { label: 'Employees', to: '/admin/employees', adminOnly: true },
+  { label: 'Buyers', to: '/admin/buyers', adminOnly: false },
 ];
 
 /**
@@ -12,10 +12,12 @@ const TABS = [
  * the two never disagree. On narrow screens the strip scrolls sideways instead of wrapping.
  */
 export function MastersTabs() {
+  const isAdmin = useMe().data?.capabilities.includes('ADMIN') ?? false;
+  const tabs = TABS.filter((t) => isAdmin || !t.adminOnly);
   return (
     <nav aria-label="Masters" className="bg-card -mx-4 mb-5 border-b sm:mx-0 sm:rounded-t-lg">
       <ul className="flex overflow-x-auto px-2 [scrollbar-width:none]">
-        {TABS.map((tab) => (
+        {tabs.map((tab) => (
           <li key={tab.to} className="shrink-0">
             <NavLink
               to={tab.to}

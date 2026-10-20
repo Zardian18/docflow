@@ -1,5 +1,6 @@
 import {
   CURRENT_TEMPLATE,
+  DOC_KIND_LABEL,
   TAG_LABEL,
   TAGS,
   WORK_SORTS,
@@ -12,6 +13,7 @@ import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { SearchField, useDebounced } from '@/components/ListControls';
+import { DocumentButtons } from '@/components/DocumentButtons';
 import { ChoiceSelect } from '@/components/ListFilters';
 import { PageBody, PageHeader } from '@/components/PageHeader';
 import { ResponsiveTable, type Column } from '@/components/ResponsiveTable';
@@ -21,7 +23,7 @@ import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 import { useMe } from '@/lib/auth';
 import { formatDate, formatDateTime } from '@/lib/format';
-import { clockText, days, orderRef, waitedFor } from '@/lib/labels';
+import { clockText, days, waitedFor } from '@/lib/labels';
 import { cn } from '@/lib/utils';
 
 const STAGES = CURRENT_TEMPLATE.steps
@@ -49,7 +51,6 @@ export function WorkPage() {
   const query: WorkQuery = {
     tab: get('tab') as WorkQuery['tab'],
     buyerId: get('buyerId'),
-    companyId: get('companyId'),
     stepKey: get('stepKey'),
     tag: TAGS.includes(get('tag') as Tag) ? (get('tag') as Tag) : undefined,
     q: get('q'),
@@ -82,9 +83,7 @@ export function WorkPage() {
   }, [debounced]);
 
   const showTags = me.teams.includes('MATERIALS') && (!query.tab || query.tab === 'MATERIALS');
-  const filtered = Boolean(
-    query.buyerId || query.companyId || query.stepKey || query.tag || query.q,
-  );
+  const filtered = Boolean(query.buyerId || query.stepKey || query.tag || query.q);
   const total = work.data?.tabs.reduce((n, t) => n + t.count, 0);
 
   const columns: Column<WorkItem>[] = [
@@ -94,15 +93,9 @@ export function WorkPage() {
       primary: true,
       sortKey: 'order',
       cell: (w) => (
-        <span className="flex flex-col">
-          <Link
-            to={`/orders/${w.orderId}#task-${w.taskId}`}
-            className="font-medium hover:underline"
-          >
-            {orderRef(w.orderNumber)} · {w.buyerName}
-          </Link>
-          <span className="text-muted-foreground text-xs">{w.companyName}</span>
-        </span>
+        <Link to={`/orders/${w.orderId}#task-${w.taskId}`} className="font-medium hover:underline">
+          {w.orderRef} · {w.buyerName}
+        </Link>
       ),
     },
     {
@@ -120,6 +113,23 @@ export function WorkPage() {
           </span>
         </span>
       ),
+    },
+    {
+      key: 'documents',
+      header: 'Latest document',
+      cell: (w) =>
+        w.documents.length === 0 ? (
+          <span className="text-muted-foreground">—</span>
+        ) : (
+          <ul className="flex flex-col gap-1.5">
+            {w.documents.map((d) => (
+              <li key={d.id} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="text-muted-foreground text-xs">{DOC_KIND_LABEL[d.kind]}</span>
+                <DocumentButtons doc={d} size="xs" />
+              </li>
+            ))}
+          </ul>
+        ),
     },
     {
       key: 'waiting',
@@ -214,13 +224,6 @@ export function WorkPage() {
               onChange={(buyerId) => update({ buyerId })}
             />
             <ChoiceSelect
-              label="Company"
-              anyLabel="All companies"
-              value={query.companyId}
-              choices={(work.data?.companies ?? []).map((c) => ({ value: c.id, label: c.name }))}
-              onChange={(companyId) => update({ companyId })}
-            />
-            <ChoiceSelect
               label="Stage"
               anyLabel="All stages"
               value={query.stepKey}
@@ -273,7 +276,6 @@ export function WorkPage() {
                 setQ('');
                 update({
                   buyerId: undefined,
-                  companyId: undefined,
                   stepKey: undefined,
                   tag: undefined,
                   q: undefined,
