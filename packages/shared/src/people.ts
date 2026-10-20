@@ -4,7 +4,7 @@ import { z } from 'zod';
  * v2 people model (decisions.md D24). Two separate mechanisms, as the brief requires:
  * - **Teams** are pools: a step held by a team is open to every member, and any one acts.
  *   A person can be in any number of teams, with no exclusions.
- * - **Named slots** are specific people chosen per company and copied onto each order.
+ * - **Named slots** are specific people chosen per buyer and copied onto each order.
  */
 export const TEAMS = [
   'REGULATION',

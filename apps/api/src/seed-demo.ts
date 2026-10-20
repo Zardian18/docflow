@@ -33,7 +33,7 @@ try {
   const password = values.live ? (reused ?? randomBytes(12).toString('base64url')) : DEMO_PASSWORD;
   const result = await seedDemo(db, storage, { password, withAdmin: !values.live });
   console.log(
-    `Seeded ${result.employees} people, ${result.companies} companies and ${result.orders} orders.`,
+    `Seeded ${result.employees} people, ${result.buyers} buyers and ${result.orders} orders.`,
   );
   if (values.live && reused) {
     console.log(`Demo accounts (<name>@${DEMO_DOMAIN}) use the password you gave.`);

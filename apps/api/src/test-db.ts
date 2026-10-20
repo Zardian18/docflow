@@ -27,7 +27,7 @@ export async function setupTestDb() {
 /** Empties every table (orders and their history included). */
 export async function resetDb(db: Db) {
   await db.execute(
-    sql`truncate order_events, orders, uploads, buyers, companies, sessions, password_tokens, employees cascade`,
+    sql`truncate order_events, orders, uploads, buyers, sessions, password_tokens, employees cascade`,
   );
 }
 

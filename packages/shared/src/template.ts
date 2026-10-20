@@ -94,6 +94,8 @@ export interface TaskStep extends StepBase {
   docs?: Array<{ kind: DocKind; required: boolean }>;
   form?: Form;
   paymentKind?: 'ADVANCE' | 'BALANCE';
+  /** Completing needs at least one component of this type for the task's product (D27) */
+  needsComponents?: Tag;
 }
 
 export interface ReviewLoopStep extends StepBase {
@@ -133,9 +135,15 @@ export interface StatusLogStep extends StepBase {
   form?: 'DATE';
 }
 
+/**
+ * ALL_COMPONENTS_DELIVERED: every component has a Deliver Date (template v1).
+ * ALL_COMPONENTS_COMPLETE: every component has all its dates, Challan No. and LR Details (D27).
+ */
+export type DataGateCondition = 'ALL_COMPONENTS_DELIVERED' | 'ALL_COMPONENTS_COMPLETE';
+
 export interface DataGateStep extends StepBase {
   kind: 'DATA_GATE';
-  condition: 'ALL_COMPONENTS_DELIVERED';
+  condition: DataGateCondition;
 }
 
 export interface CheckpointLogStep extends StepBase {
@@ -535,8 +543,38 @@ export const EXPORT_ORDER_V1: Template = {
   componentsEditableUntil: 'production_qa',
 };
 
-export const TEMPLATES: Template[] = [EXPORT_ORDER_V1];
-export const CURRENT_TEMPLATE = EXPORT_ORDER_V1;
+/**
+ * v2 (D27): the ordering tasks need components listed first, the hand-over to Production
+ * needs every component's dates, Challan No. and LR Details, and the payment proof is shown
+ * to the people signing off the payment check.
+ */
+export const EXPORT_ORDER_V2: Template = {
+  ...EXPORT_ORDER_V1,
+  version: 2,
+  steps: EXPORT_ORDER_V1.steps.map((step): StepDef => {
+    if (step.kind === 'TASK' && step.key === 'raw_material') {
+      return { ...step, needsComponents: 'RAW_MATERIAL' };
+    }
+    if (step.kind === 'TASK' && step.key === 'packaging') {
+      return { ...step, needsComponents: 'PACKAGING' };
+    }
+    if (step.kind === 'DATA_GATE') {
+      return {
+        ...step,
+        title: 'Materials complete',
+        help: 'Completes by itself when every component of every product has its PO, Dispatch and Deliver Dates, Challan No. and LR Details.',
+        condition: 'ALL_COMPONENTS_COMPLETE',
+      };
+    }
+    if (step.kind === 'APPROVAL_CHAIN' && step.key === 'payment_check') {
+      return { ...step, docToApprove: ['PAYMENT_PROOF'] };
+    }
+    return step;
+  }),
+};
+
+export const TEMPLATES: Template[] = [EXPORT_ORDER_V1, EXPORT_ORDER_V2];
+export const CURRENT_TEMPLATE = EXPORT_ORDER_V2;
 
 export function findTemplate(key: string, version: number): Template {
   const t = TEMPLATES.find((x) => x.key === key && x.version === version);

@@ -116,7 +116,7 @@ export const PeopleSearchQuery = z.object({
   capability: Capability,
 });
 
-// ---- Companies (Q60: who fills each named slot, and ALL/ANY per approval slot) ----------
+// ---- Buyers (Q3; D27: the buyer is the company, and holds the default chain) ----------
 
 export const SlotAssignment = z.object({
   slot: Slot,
@@ -126,15 +126,6 @@ export const SlotAssignment = z.object({
 });
 export type SlotAssignment = z.infer<typeof SlotAssignment>;
 
-export const Company = z.object({
-  id: z.uuid(),
-  name: z.string(),
-  code: z.string().nullable(),
-  isActive: z.boolean(),
-  slots: z.array(SlotAssignment),
-});
-export type Company = z.infer<typeof Company>;
-
 export const SlotInput = z.object({
   slot: Slot,
   employeeIds: z.array(z.uuid()).max(20),
@@ -142,7 +133,20 @@ export const SlotInput = z.object({
 });
 export type SlotInput = z.input<typeof SlotInput>;
 
-export const CompanyUpsert = z.object({
+export const Buyer = z.object({
+  id: z.uuid(),
+  name: z.string(),
+  code: z.string().nullable(),
+  country: z.string().nullable(),
+  address: z.string().nullable(),
+  contact: z.string().nullable(),
+  isActive: z.boolean(),
+  /** The default chain every new order for this buyer copies */
+  slots: z.array(SlotAssignment),
+});
+export type Buyer = z.infer<typeof Buyer>;
+
+export const BuyerUpsert = z.object({
   name: Name,
   code: z
     .string()
@@ -152,35 +156,19 @@ export const CompanyUpsert = z.object({
     .nullable()
     .optional()
     .default(null),
-  isActive: z.boolean().default(true),
-  slots: z.array(SlotInput).max(20).default([]),
-});
-export type CompanyUpsert = z.input<typeof CompanyUpsert>;
-
-export const CompanyOption = z.object({
-  id: z.uuid(),
-  name: z.string(),
-  code: z.string().nullable(),
-});
-export type CompanyOption = z.infer<typeof CompanyOption>;
-
-// ---- Buyers (Q3) --------------------------------------------------------------
-
-export const Buyer = z.object({
-  id: z.uuid(),
-  name: z.string(),
-  country: z.string().nullable(),
-  address: z.string().nullable(),
-  contact: z.string().nullable(),
-  isActive: z.boolean(),
-});
-export type Buyer = z.infer<typeof Buyer>;
-
-export const BuyerUpsert = z.object({
-  name: Name,
   country: OptionalText(80),
   address: OptionalText(500),
   contact: OptionalText(200),
   isActive: z.boolean().default(true),
+  /** Only Admin sets the default chain; left out, it stays as it is */
+  slots: z.array(SlotInput).max(20).optional(),
 });
 export type BuyerUpsert = z.input<typeof BuyerUpsert>;
+
+export const BuyerOption = z.object({
+  id: z.uuid(),
+  name: z.string(),
+  code: z.string().nullable(),
+  country: z.string().nullable(),
+});
+export type BuyerOption = z.infer<typeof BuyerOption>;

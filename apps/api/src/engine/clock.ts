@@ -61,8 +61,14 @@ export function heldClock(intervals: Interval[], now = new Date()) {
   return { days: Math.ceil(ms / DAY_MS), since: first.startedAt.toISOString() };
 }
 
-/** Days since a calendar date (component rows: days since PO date) */
-export function daysSinceDate(day: string | null, now = new Date()) {
-  if (!day) return null;
-  return Math.max(0, daysBetweenLocal(day, localDay(now)));
+/**
+ * Calendar days from one date to another (component rows, D27): still running, counted up to
+ * today, while the end date isn't filled in yet. Nothing when the start isn't known.
+ */
+export function dayCount(from: string | null, to: string | null, now = new Date()) {
+  if (!from) return null;
+  return {
+    days: Math.max(0, daysBetweenLocal(from, to ?? localDay(now))),
+    running: to === null,
+  };
 }

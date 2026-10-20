@@ -16,8 +16,8 @@ import { issuePasswordLink } from '../auth/password-links.js';
 import { capabilitiesOf, revokeEmployeeSessions, teamsOf } from '../auth/sessions.js';
 import type { DbOrTx, Tx } from '../db/client.js';
 import {
-  companies,
-  companySlotPeople,
+  buyers,
+  buyerSlotPeople,
   employeeCapabilities,
   employees,
   teamMembers,
@@ -76,7 +76,7 @@ async function otherActiveAdmins(tx: Tx, employeeId: string) {
   return row?.n ?? 0;
 }
 
-/** Companies that name this person in a slot needing a capability they would lose */
+/** Buyers that name this person in a slot needing a capability they would lose */
 async function slotsBlocking(
   tx: Tx,
   employeeId: string,
@@ -84,11 +84,11 @@ async function slotsBlocking(
   deactivating: boolean,
 ) {
   const rows = await tx
-    .selectDistinct({ name: companies.name, slot: companySlotPeople.slot })
-    .from(companySlotPeople)
-    .innerJoin(companies, eq(companies.id, companySlotPeople.companyId))
-    .where(eq(companySlotPeople.employeeId, employeeId))
-    .orderBy(asc(companies.name));
+    .selectDistinct({ name: buyers.name, slot: buyerSlotPeople.slot })
+    .from(buyerSlotPeople)
+    .innerJoin(buyers, eq(buyers.id, buyerSlotPeople.buyerId))
+    .where(eq(buyerSlotPeople.employeeId, employeeId))
+    .orderBy(asc(buyers.name));
   return rows.filter((r) => deactivating || losing.includes(SLOT_INFO[r.slot].capability));
 }
 
@@ -204,14 +204,14 @@ export const employeeRoutes: FastifyPluginAsyncZod<
           ) {
             throw conflict('LAST_ADMIN', 'This is the last active Admin and must stay one');
           }
-          // Like D17: nobody silently drops out of a company's named people
+          // Like D17: nobody silently drops out of a buyer's named people
           const blocking = await slotsBlocking(tx, params.id, losing, deactivating);
           if (blocking.length > 0) {
             const names = [...new Set(blocking.map((b) => b.name))];
             throw conflict(
               'EMPLOYEE_NAMED',
-              `${existing.name} is named in ${names.join(', ')}. Change those companies first.`,
-              { companies: names },
+              `${existing.name} is named in ${names.join(', ')}. Change those buyers first.`,
+              { buyers: names },
             );
           }
           await tx
