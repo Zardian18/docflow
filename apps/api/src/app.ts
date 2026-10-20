@@ -24,14 +24,11 @@ import { authRoutes } from './routes/auth.js';
 import { companyRoutes } from './routes/companies.js';
 import { DEFAULT_LIMITS, type Limits } from './routes/deps.js';
 import { employeeRoutes } from './routes/employees.js';
+import { buyerRoutes } from './routes/buyers.js';
 import { lookupRoutes } from './routes/lookups.js';
-import { roleRoutes } from './routes/roles.js';
+import { orderRoutes } from './routes/orders.js';
 import { uploadRoutes } from './routes/uploads.js';
-import { workflowRoutes } from './routes/workflows.js';
-import { adminWorkflowRoutes } from './routes/admin-workflows.js';
-import { approvalRoutes } from './routes/approvals.js';
 import { runMaintenance } from './maintenance.js';
-import type { EmailProvider } from './notify/outbox.js';
 import { createB2Storage } from './storage/b2.js';
 import { createLocalStorage, LOCAL_STORAGE_PATH } from './storage/local.js';
 import type { StorageService } from './storage/storage.js';
@@ -42,8 +39,6 @@ export interface AppDeps {
   limits?: Partial<Limits>;
   /** Defaults to Backblaze B2 from env; tests pass in-memory storage. */
   storage?: StorageService;
-  /** Email delivery; null until Phase 5 wires a real provider (rows are marked skipped). */
-  email?: EmailProvider | null;
 }
 
 /** The development/CI disk driver when STORAGE_DRIVER=local (refused in production by env.ts). */
@@ -99,7 +94,6 @@ function secretsMatch(provided: string | undefined, expected: string): boolean {
 }
 
 export async function buildApp({
-  email = null,
   env,
   db,
   limits: limitOverrides,
@@ -204,15 +198,15 @@ export async function buildApp({
   );
 
   app.get('/v1/ping', { schema: { response: { 200: PingResponse } } }, async () => {
-    const result = await db.execute<{ db_time: Date; role_count: number }>(
-      sql`select now() as db_time, (select count(*)::int from roles) as role_count`,
+    const result = await db.execute<{ db_time: Date; employee_count: number }>(
+      sql`select now() as db_time, (select count(*)::int from employees) as employee_count`,
     );
     const row = result.rows[0];
     if (!row) throw new Error('ping query returned no rows');
     return {
       message: 'pong' as const,
       dbTime: new Date(row.db_time).toISOString(),
-      roleCount: row.role_count,
+      employeeCount: row.employee_count,
     };
   });
 
@@ -223,16 +217,14 @@ export async function buildApp({
 
   const deps = { db, env, limits };
   await app.register(authRoutes, { ...deps, prefix: '/v1/auth' });
-  await app.register(roleRoutes, { ...deps, prefix: '/v1/roles' });
   await app.register(employeeRoutes, { ...deps, storage, prefix: '/v1/employees' });
   await app.register(lookupRoutes, deps);
   await app.register(companyRoutes, { ...deps, prefix: '/v1/companies' });
+  await app.register(buyerRoutes, { ...deps, prefix: '/v1/buyers' });
   await app.register(uploadRoutes, { ...deps, storage, prefix: '/v1/uploads' });
-  await app.register(workflowRoutes, { ...deps, storage, email, prefix: '/v1/workflows' });
-  await app.register(approvalRoutes, { ...deps, prefix: '/v1/approvals' });
-  await app.register(adminWorkflowRoutes, { ...deps, prefix: '/v1/admin/workflows' });
+  await app.register(orderRoutes, { ...deps, storage });
 
-  // Called by infra/cron-worker. Housekeeping now; Phase 5 adds the outbox retry.
+  // Called by infra/cron-worker: housekeeping only (v2 sends no email, D24)
   app.post(
     TICK_PATH,
     {

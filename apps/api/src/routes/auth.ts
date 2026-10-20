@@ -16,11 +16,11 @@ import {
   createSession,
   revokeEmployeeSessions,
   revokeSession,
-  withRoles,
+  capabilitiesOf,
+  teamsOf,
   type AuthUser,
 } from '../auth/sessions.js';
 import { employees } from '../db/schema.js';
-import { heldRoles } from '../domain/roles.js';
 import { perUserLimit, type RouteDeps } from './deps.js';
 import { AppError, badRequest } from '../errors.js';
 import { currentUser, requireUser, SESSION_COOKIE } from '../plugins/auth.js';
@@ -33,9 +33,8 @@ const toMe = (user: Omit<AuthUser, 'sessionId'>) => ({
   name: user.name,
   email: user.email,
   employeeCode: user.employeeCode,
-  roleName: user.roleName,
-  permission: user.permission,
-  permissions: user.permissions,
+  teams: user.teams,
+  capabilities: user.capabilities,
 });
 
 export const authRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db, env, limits }) => {
@@ -91,17 +90,21 @@ export const authRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db, en
           email: employees.email,
           employeeCode: employees.employeeCode,
           passwordHash: employees.passwordHash,
-          roles: heldRoles({ activeOnly: true }),
+          teams: teamsOf,
+          capabilities: capabilitiesOf,
         })
         .from(employees)
         .where(and(eq(employees.email, email), eq(employees.isActive, true)))
         .limit(1);
-      // No active role means no access, exactly like an unknown email
       const user = row
-        ? withRoles(
-            { id: row.id, name: row.name, email: row.email, employeeCode: row.employeeCode },
-            row.roles,
-          )
+        ? {
+            id: row.id,
+            name: row.name,
+            email: row.email,
+            employeeCode: row.employeeCode,
+            teams: row.teams,
+            capabilities: row.capabilities,
+          }
         : null;
 
       if (!user || !row?.passwordHash) {

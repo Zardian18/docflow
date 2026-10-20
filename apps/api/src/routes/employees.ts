@@ -1,25 +1,30 @@
 import {
-  CfoInfo,
   Employee,
   EmployeeCreate,
+  EmployeeListQuery,
   EmployeeUpdate,
   IdParam,
-  ListQuery,
   paginated,
   PasswordLink,
-  Permission,
-  byPriority,
+  SLOT_INFO,
+  type Capability,
+  type Team,
 } from '@docflow/shared';
-import { and, asc, count, eq, ne, or, sql } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { issuePasswordLink } from '../auth/password-links.js';
-import { revokeEmployeeSessions } from '../auth/sessions.js';
+import { capabilitiesOf, revokeEmployeeSessions, teamsOf } from '../auth/sessions.js';
 import type { DbOrTx, Tx } from '../db/client.js';
-import { companies, companyDefaultApprovers, employees } from '../db/schema.js';
-import { conflict, isUniqueViolation, notFound } from '../errors.js';
-import { currentUser, requirePermission } from '../plugins/auth.js';
+import {
+  companies,
+  companySlotPeople,
+  employeeCapabilities,
+  employees,
+  teamMembers,
+} from '../db/schema.js';
 import { deleteEmployee } from '../domain/deletion.js';
-import { checkRoleSet, heldRoles, holdsPermission, setRoles } from '../domain/roles.js';
+import { conflict, isUniqueViolation, notFound } from '../errors.js';
+import { currentUser, requireCapability } from '../plugins/auth.js';
 import type { StorageService } from '../storage/storage.js';
 import type { RouteDeps } from './deps.js';
 import { containsPattern, pageOffset, statusCondition } from './query-helpers.js';
@@ -29,44 +34,66 @@ const employeeColumns = {
   name: employees.name,
   email: employees.email,
   employeeCode: employees.employeeCode,
-  roles: heldRoles({ activeOnly: false }),
+  teams: teamsOf,
+  capabilities: capabilitiesOf,
   isActive: employees.isActive,
   hasPassword: sql<boolean>`${employees.passwordHash} is not null`,
 };
 
-const sortRoles = <T extends { roles: Employee['roles'] }>(row: T): T => ({
-  ...row,
-  roles: byPriority(row.roles),
-});
-
 async function getEmployee(db: DbOrTx, id: string) {
   const [row] = await db.select(employeeColumns).from(employees).where(eq(employees.id, id));
   if (!row) throw notFound('Employee');
-  return sortRoles(row);
+  return row;
 }
 
-/** Companies whose default chain includes the employee (decisions.md D17). */
-async function chainCompanies(tx: Tx, employeeId: string) {
-  return tx
-    .select({ id: companies.id, name: companies.name })
-    .from(companyDefaultApprovers)
-    .innerJoin(companies, eq(companies.id, companyDefaultApprovers.companyId))
-    .where(eq(companyDefaultApprovers.employeeId, employeeId))
-    .orderBy(asc(companies.name));
+async function setMemberships(tx: Tx, id: string, teams: Team[], capabilities: Capability[]) {
+  await tx.delete(teamMembers).where(eq(teamMembers.employeeId, id));
+  await tx.delete(employeeCapabilities).where(eq(employeeCapabilities.employeeId, id));
+  const uniqueTeams = [...new Set(teams)];
+  const uniqueCaps = [...new Set(capabilities)];
+  if (uniqueTeams.length > 0) {
+    await tx.insert(teamMembers).values(uniqueTeams.map((team) => ({ employeeId: id, team })));
+  }
+  if (uniqueCaps.length > 0) {
+    await tx
+      .insert(employeeCapabilities)
+      .values(uniqueCaps.map((capability) => ({ employeeId: id, capability })));
+  }
 }
 
 async function otherActiveAdmins(tx: Tx, employeeId: string) {
   const [row] = await tx
     .select({ n: count() })
     .from(employees)
+    .innerJoin(employeeCapabilities, eq(employeeCapabilities.employeeId, employees.id))
     .where(
-      and(ne(employees.id, employeeId), eq(employees.isActive, true), holdsPermission('ADMIN')),
+      and(
+        ne(employees.id, employeeId),
+        eq(employees.isActive, true),
+        eq(employeeCapabilities.capability, 'ADMIN'),
+      ),
     );
   return row?.n ?? 0;
 }
 
+/** Companies that name this person in a slot needing a capability they would lose */
+async function slotsBlocking(
+  tx: Tx,
+  employeeId: string,
+  losing: Capability[],
+  deactivating: boolean,
+) {
+  const rows = await tx
+    .selectDistinct({ name: companies.name, slot: companySlotPeople.slot })
+    .from(companySlotPeople)
+    .innerJoin(companies, eq(companies.id, companySlotPeople.companyId))
+    .where(eq(companySlotPeople.employeeId, employeeId))
+    .orderBy(asc(companies.name));
+  return rows.filter((r) => deactivating || losing.includes(SLOT_INFO[r.slot].capability));
+}
+
 /** Maps unique-index violations on employees to friendly 409s. */
-async function translateUniqueErrors<T>(db: DbOrTx, run: () => Promise<T>): Promise<T> {
+async function translateUniqueErrors<T>(run: () => Promise<T>): Promise<T> {
   try {
     return await run();
   } catch (err) {
@@ -76,16 +103,6 @@ async function translateUniqueErrors<T>(db: DbOrTx, run: () => Promise<T>): Prom
     if (isUniqueViolation(err, 'employees_code_unique')) {
       throw conflict('CODE_TAKEN', 'Another employee already uses this employee code');
     }
-    if (isUniqueViolation(err, 'employees_one_active_cfo')) {
-      const [cfo] = await db
-        .select({ name: employees.name })
-        .from(employees)
-        .where(and(eq(employees.isCfo, true), eq(employees.isActive, true)));
-      throw conflict(
-        'CFO_EXISTS',
-        `${cfo?.name ?? 'Another employee'} is already the active CFO. Deactivate them or change their roles first.`,
-      );
-    }
     throw err;
   }
 }
@@ -93,18 +110,11 @@ async function translateUniqueErrors<T>(db: DbOrTx, run: () => Promise<T>): Prom
 export const employeeRoutes: FastifyPluginAsyncZod<
   RouteDeps & { storage: StorageService }
 > = async (app, { db, env, storage }) => {
-  // onRequest, so unauthorised callers are refused before any input validation
-  app.addHook('onRequest', requirePermission('ADMIN'));
+  app.addHook('onRequest', requireCapability('ADMIN'));
 
   app.get(
     '/',
-    {
-      schema: {
-        // permission narrows the list, e.g. Creators for the dashboard's Created By filter
-        querystring: ListQuery.extend({ permission: Permission.optional() }),
-        response: { 200: paginated(Employee) },
-      },
-    },
+    { schema: { querystring: EmployeeListQuery, response: { 200: paginated(Employee) } } },
     async ({ query }) => {
       const pattern = query.q ? containsPattern(query.q) : undefined;
       const where = and(
@@ -116,7 +126,24 @@ export const employeeRoutes: FastifyPluginAsyncZod<
             )
           : undefined,
         statusCondition(employees.isActive, query.status),
-        query.permission ? holdsPermission(query.permission) : undefined,
+        query.team
+          ? inArray(
+              employees.id,
+              db
+                .select({ id: teamMembers.employeeId })
+                .from(teamMembers)
+                .where(eq(teamMembers.team, query.team)),
+            )
+          : undefined,
+        query.capability
+          ? inArray(
+              employees.id,
+              db
+                .select({ id: employeeCapabilities.employeeId })
+                .from(employeeCapabilities)
+                .where(eq(employeeCapabilities.capability, query.capability)),
+            )
+          : undefined,
       );
       const [items, [totals]] = await Promise.all([
         db
@@ -128,41 +155,22 @@ export const employeeRoutes: FastifyPluginAsyncZod<
           .offset(pageOffset(query)),
         db.select({ total: count() }).from(employees).where(where),
       ]);
-      return {
-        items: items.map(sortRoles),
-        total: totals?.total ?? 0,
-        page: query.page,
-        pageSize: query.pageSize,
-      };
+      return { items, total: totals?.total ?? 0, page: query.page, pageSize: query.pageSize };
     },
   );
-
-  app.get('/cfo', { schema: { response: { 200: CfoInfo } } }, async () => {
-    const [cfo] = await db
-      .select({ id: employees.id, name: employees.name, email: employees.email })
-      .from(employees)
-      .where(and(eq(employees.isCfo, true), eq(employees.isActive, true)));
-    return { cfo: cfo ?? null };
-  });
 
   app.post(
     '/',
     { schema: { body: EmployeeCreate, response: { 201: Employee } } },
     async (request, reply) => {
       const body = request.body;
-      const id = await translateUniqueErrors(db, () =>
+      const id = await translateUniqueErrors(() =>
         db.transaction(async (tx) => {
-          const held = await checkRoleSet(tx, body.roleIds);
           const [created] = await tx
             .insert(employees)
-            .values({
-              name: body.name,
-              email: body.email,
-              employeeCode: body.employeeCode,
-              isCfo: held.some((r) => r.permission === 'CFO'),
-            })
+            .values({ name: body.name, email: body.email, employeeCode: body.employeeCode })
             .returning({ id: employees.id });
-          await setRoles(tx, created!.id, held);
+          await setMemberships(tx, created!.id, body.teams, body.capabilities);
           return created!.id;
         }),
       );
@@ -177,49 +185,35 @@ export const employeeRoutes: FastifyPluginAsyncZod<
     async (request) => {
       const { params, body } = request;
       const actor = currentUser(request);
-
-      await translateUniqueErrors(db, () =>
+      await translateUniqueErrors(() =>
         db.transaction(async (tx) => {
           const existing = await getEmployee(tx, params.id);
-          const before = existing.roles.map((r) => r.permission);
-          const held = await checkRoleSet(
-            tx,
-            body.roleIds,
-            existing.roles.map((r) => r.id),
-          );
-          const after = held.map((r) => r.permission);
-          const rolesChanged =
-            [...body.roleIds].sort().join() !==
-            existing.roles
-              .map((r) => r.id)
-              .sort()
-              .join();
           const deactivating = existing.isActive && !body.isActive;
-          const losing = (p: Permission) =>
-            before.includes(p) && (deactivating || !after.includes(p));
-          const losingAdmin = existing.isActive && losing('ADMIN');
-
-          if (params.id === actor.id && (deactivating || !after.includes('ADMIN'))) {
+          const losing = existing.capabilities.filter((c) => !body.capabilities.includes(c));
+          const losingAdmin = existing.isActive && (deactivating || losing.includes('ADMIN'));
+          if (params.id === actor.id && (deactivating || losing.includes('ADMIN'))) {
             throw conflict(
               'CANNOT_CHANGE_SELF',
               'You cannot deactivate yourself or remove your own Admin access',
             );
           }
-          if (losingAdmin && (await otherActiveAdmins(tx, params.id)) === 0) {
+          if (
+            existing.capabilities.includes('ADMIN') &&
+            losingAdmin &&
+            (await otherActiveAdmins(tx, params.id)) === 0
+          ) {
             throw conflict('LAST_ADMIN', 'This is the last active Admin and must stay one');
           }
-          // D17: nobody leaves a company's default chain by losing their Approver role
-          if (deactivating || losing('APPROVER')) {
-            const blocking = await chainCompanies(tx, params.id);
-            if (blocking.length > 0) {
-              throw conflict(
-                'EMPLOYEE_IN_CHAINS',
-                `${existing.name} is a default approver for ${blocking.map((c) => c.name).join(', ')}. Remove them from those approval chains first.`,
-                { companies: blocking },
-              );
-            }
+          // Like D17: nobody silently drops out of a company's named people
+          const blocking = await slotsBlocking(tx, params.id, losing, deactivating);
+          if (blocking.length > 0) {
+            const names = [...new Set(blocking.map((b) => b.name))];
+            throw conflict(
+              'EMPLOYEE_NAMED',
+              `${existing.name} is named in ${names.join(', ')}. Change those companies first.`,
+              { companies: names },
+            );
           }
-
           await tx
             .update(employees)
             .set({
@@ -227,11 +221,10 @@ export const employeeRoutes: FastifyPluginAsyncZod<
               email: body.email,
               employeeCode: body.employeeCode,
               isActive: body.isActive,
-              isCfo: after.includes('CFO'),
               updatedAt: new Date(),
             })
             .where(eq(employees.id, params.id));
-          if (rolesChanged) await setRoles(tx, params.id, held);
+          await setMemberships(tx, params.id, body.teams, body.capabilities);
           if (deactivating) await revokeEmployeeSessions(tx, params.id);
         }),
       );

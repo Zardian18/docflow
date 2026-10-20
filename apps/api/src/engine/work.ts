@@ -1,0 +1,200 @@
+import {
+  findTemplate,
+  SLOT_INFO,
+  stepOf,
+  TEAM_LABEL,
+  type Slot,
+  type Tag,
+  type Team,
+  type WorkItem,
+  type WorkQuery,
+  type WorkResponse,
+} from '@docflow/shared';
+import { sql } from 'drizzle-orm';
+import type { z } from 'zod';
+import type { AuthUser } from '../auth/sessions.js';
+import type { Db } from '../db/client.js';
+import { sinceClock } from './clock.js';
+
+type Query = z.output<typeof WorkQuery>;
+
+interface Row extends Record<string, unknown> {
+  task_id: string;
+  order_id: string;
+  number: number;
+  buyer_id: string;
+  buyer_name: string;
+  company_id: string;
+  company_name: string;
+  step_key: string;
+  phase: number;
+  product_name: string | null;
+  tag: Tag | null;
+  holder_team: Team | null;
+  holder_slot: Slot | null;
+  side: string | null;
+  template_key: string;
+  template_version: number;
+  waiting_since: Date;
+  held_seconds: number;
+  held_since: Date;
+  production_started_at: Date | null;
+  chain_started_at: Date | null;
+}
+
+/** What waits for this person: tasks held by their teams, or by a slot naming them (Q8) */
+export async function myWork(db: Db, user: AuthUser, query: Query): Promise<WorkResponse> {
+  const teams = user.teams.length
+    ? sql`t.holder_team::text in (${sql.join(
+        user.teams.map((t) => sql`${t}`),
+        sql`, `,
+      )})`
+    : sql`false`;
+  const base = sql`
+    select t.id as task_id, t.order_id, o.number, b.id as buyer_id, b.name as buyer_name,
+           c.id as company_id, c.name as company_name, t.step_key, t.phase,
+           p.name as product_name, t.tag, t.holder_team, t.holder_slot, t.side,
+           o.template_key, o.template_version, hi.started_at as waiting_since,
+           h.held_seconds, h.held_since, o.production_started_at, o.chain_started_at
+      from tasks t
+      join orders o on o.id = t.order_id
+      join buyers b on b.id = o.buyer_id
+      join companies c on c.id = o.company_id
+      left join order_products p on p.id = t.product_id
+      join holder_intervals hi on hi.task_id = t.id and hi.ended_at is null
+      cross join lateral (
+        select coalesce(sum(extract(epoch from coalesce(x.ended_at, now()) - x.started_at)), 0)::float8 as held_seconds,
+               min(x.started_at) as held_since
+          from holder_intervals x
+         where x.task_id = t.id
+           and x.holder_team is not distinct from t.holder_team
+           and x.holder_slot is not distinct from t.holder_slot
+      ) h
+     where t.status = 'OPEN'
+       and o.status in ('ACTIVE', 'NO_ACTION_NEEDED')
+       and (${teams} or (t.holder_slot is not null and exists (
+             select 1 from order_slot_people s
+              where s.order_id = t.order_id and s.slot = t.holder_slot and s.employee_id = ${user.id})))
+       -- An approver who has voted on this stage is done with it, even if others haven't
+       and not exists (
+             select 1 from approval_votes v
+              where v.task_id = t.id and v.run = t.run and v.stage = t.side and v.employee_id = ${user.id})`;
+
+  const { rows: all } = await db.execute<Row>(base);
+
+  const keep = (r: Row) => {
+    if (query.tab === 'NAMED' && !r.holder_slot) return false;
+    if (query.tab && query.tab !== 'NAMED' && r.holder_team !== query.tab) return false;
+    if (query.buyerId && r.buyer_id !== query.buyerId) return false;
+    if (query.companyId && r.company_id !== query.companyId) return false;
+    if (query.stepKey && r.step_key !== query.stepKey) return false;
+    if (query.tag && r.tag !== query.tag) return false;
+    const since = new Date(r.waiting_since);
+    if (query.since && since < new Date(query.since)) return false;
+    if (query.until && since > new Date(query.until)) return false;
+    if (query.q) {
+      const needle = query.q.toLowerCase();
+      const ref = `ord-${String(r.number).padStart(4, '0')}`;
+      if (!r.buyer_name.toLowerCase().includes(needle) && !ref.includes(needle)) return false;
+    }
+    return true;
+  };
+
+  const value = (r: Row): number | string => {
+    switch (query.sort) {
+      case 'waiting':
+        return new Date(r.waiting_since).getTime();
+      case 'held':
+        return -Number(r.held_seconds);
+      case 'order':
+        return r.number;
+      case 'buyer':
+        return r.buyer_name.toLowerCase();
+      case 'trackerA':
+        return r.production_started_at ? new Date(r.production_started_at).getTime() : Infinity;
+      case 'trackerB':
+        return r.chain_started_at ? new Date(r.chain_started_at).getTime() : Infinity;
+    }
+  };
+  const dir = query.dir === 'asc' ? 1 : -1;
+  const items = all
+    .filter(keep)
+    .sort((a, b) => {
+      const x = value(a);
+      const y = value(b);
+      return (x < y ? -1 : x > y ? 1 : 0) * dir || a.task_id.localeCompare(b.task_id);
+    })
+    .map((r): WorkItem => {
+      const template = findTemplate(r.template_key, r.template_version);
+      const step = stepOf(template, r.step_key);
+      const asTeam = r.holder_team;
+      const asSlot = r.holder_slot;
+      return {
+        taskId: r.task_id,
+        orderId: r.order_id,
+        orderNumber: r.number,
+        buyerName: r.buyer_name,
+        companyName: r.company_name,
+        stepKey: r.step_key,
+        title:
+          step.kind === 'APPROVAL_CHAIN'
+            ? `${step.title} · ${step.stages.find((s) => s.key === r.side)?.title ?? ''}`
+            : step.title,
+        phase: r.phase,
+        productName: r.product_name,
+        tag: r.tag,
+        as: {
+          team: asTeam,
+          slot: asSlot,
+          label: asTeam ? TEAM_LABEL[asTeam] : asSlot ? SLOT_INFO[asSlot].label : '',
+        },
+        waitingSince: new Date(r.waiting_since).toISOString(),
+        held: {
+          days: Math.ceil(Number(r.held_seconds) / 86_400),
+          since: new Date(r.held_since).toISOString(),
+        },
+        trackerA: sinceClock(r.production_started_at ? new Date(r.production_started_at) : null),
+        trackerB: sinceClock(r.chain_started_at ? new Date(r.chain_started_at) : null),
+        actions: actionsFromKind(step.kind, r.side),
+      };
+    });
+
+  const tabCounts = new Map<string, number>();
+  for (const r of all) {
+    const tab = r.holder_team ?? 'NAMED';
+    tabCounts.set(tab, (tabCounts.get(tab) ?? 0) + 1);
+  }
+  const tabs = [
+    ...user.teams.map((t) => ({ tab: t, label: TEAM_LABEL[t], count: tabCounts.get(t) ?? 0 })),
+    ...(tabCounts.has('NAMED') || user.capabilities.some((c) => c !== 'ADMIN')
+      ? [{ tab: 'NAMED', label: 'Named on orders', count: tabCounts.get('NAMED') ?? 0 }]
+      : []),
+  ];
+  const uniq = <T extends { id: string; name: string }>(list: T[]) =>
+    [...new Map(list.map((x) => [x.id, x])).values()].sort((a, b) => a.name.localeCompare(b.name));
+  return {
+    items,
+    tabs,
+    buyers: uniq(all.map((r) => ({ id: r.buyer_id, name: r.buyer_name }))),
+    companies: uniq(all.map((r) => ({ id: r.company_id, name: r.company_name }))),
+  };
+}
+
+function actionsFromKind(kind: string, side: string | null): string[] {
+  switch (kind) {
+    case 'TASK':
+      return ['COMPLETE'];
+    case 'REVIEW_LOOP':
+      return side === 'REVIEWER' ? ['CONFIRM', 'RETURN'] : ['SUBMIT'];
+    case 'APPROVAL_CHAIN':
+      return ['APPROVE', 'REJECT'];
+    case 'STATUS_LOG':
+      return ['LOG'];
+    case 'CHECKPOINT_LOG':
+      return ['CHECKPOINT'];
+    case 'CLOSE':
+      return ['CLOSE'];
+    default:
+      return [];
+  }
+}

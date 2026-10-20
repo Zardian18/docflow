@@ -1,25 +1,28 @@
-import { count, eq } from 'drizzle-orm';
+import { count, eq, or } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
-  auditEvents,
+  approvalVotes,
+  buyers,
   companies,
-  companyDefaultApprovers,
-  employeeRoles,
+  companySlotPeople,
+  componentChanges,
+  documents,
   employees,
+  orderEvents,
+  orders,
+  orderSlotPeople,
   passwordTokens,
-  roles,
+  payments,
   sessions,
+  shipmentCheckpoints,
   uploads,
-  workflowSteps,
-  workflows,
 } from '../db/schema.js';
 import { conflict, notFound } from '../errors.js';
 import type { StorageService } from '../storage/storage.js';
 
 /**
- * Hard delete is allowed only for records that nothing else refers to (decisions.md D21):
- * mistakes and test entries. Anything with history must be deactivated instead, so audit
- * trails stay readable (URS §6, invariant 7).
+ * Hard delete is allowed only for records nothing refers to (D21): mistakes and test entries.
+ * Anything with history must be deactivated instead, so order histories stay readable.
  */
 const hasHistory = (message: string) =>
   conflict('HAS_HISTORY', `${message} It can be deactivated instead.`);
@@ -42,28 +45,42 @@ export async function deleteEmployee(
     .where(eq(employees.id, id));
   if (!employee) throw notFound('Employee');
 
-  const history =
-    (await countOf(
-      db.select({ n: count() }).from(workflowSteps).where(eq(workflowSteps.employeeId, id)),
-    )) +
-    (await countOf(db.select({ n: count() }).from(workflows).where(eq(workflows.createdBy, id)))) +
-    (await countOf(db.select({ n: count() }).from(auditEvents).where(eq(auditEvents.actorId, id))));
-  if (history > 0) throw hasHistory(`${employee.name} is part of at least one submitted document.`);
+  const counts = await Promise.all([
+    countOf(db.select({ n: count() }).from(orders).where(eq(orders.createdBy, id))),
+    countOf(
+      db.select({ n: count() }).from(orderSlotPeople).where(eq(orderSlotPeople.employeeId, id)),
+    ),
+    countOf(db.select({ n: count() }).from(orderEvents).where(eq(orderEvents.actorId, id))),
+    countOf(db.select({ n: count() }).from(documents).where(eq(documents.uploadedBy, id))),
+    countOf(db.select({ n: count() }).from(approvalVotes).where(eq(approvalVotes.employeeId, id))),
+    countOf(db.select({ n: count() }).from(payments).where(eq(payments.verifiedBy, id))),
+    countOf(
+      db
+        .select({ n: count() })
+        .from(shipmentCheckpoints)
+        .where(eq(shipmentCheckpoints.loggedBy, id)),
+    ),
+    countOf(
+      db.select({ n: count() }).from(componentChanges).where(eq(componentChanges.actorId, id)),
+    ),
+  ]);
+  if (counts.some((n) => n > 0))
+    throw hasHistory(`${employee.name} is part of at least one order.`);
 
-  const chains = await db
-    .select({ name: companies.name })
-    .from(companyDefaultApprovers)
-    .innerJoin(companies, eq(companies.id, companyDefaultApprovers.companyId))
-    .where(eq(companyDefaultApprovers.employeeId, id));
-  if (chains.length > 0) {
+  const named = await db
+    .selectDistinct({ name: companies.name })
+    .from(companySlotPeople)
+    .innerJoin(companies, eq(companies.id, companySlotPeople.companyId))
+    .where(eq(companySlotPeople.employeeId, id));
+  if (named.length > 0) {
     throw conflict(
-      'EMPLOYEE_IN_CHAINS',
-      `${employee.name} is a default approver for ${chains.map((c) => c.name).join(', ')}. Remove them from those approval chains first.`,
-      { companies: chains },
+      'EMPLOYEE_NAMED',
+      `${employee.name} is named in ${named.map((c) => c.name).join(', ')}. Change those companies first.`,
+      { companies: named },
     );
   }
 
-  // Files they uploaded but never submitted are leftovers, not history
+  // Files they uploaded but never attached are leftovers, not history
   const leftovers = await db
     .select({ key: uploads.objectKey })
     .from(uploads)
@@ -72,6 +89,7 @@ export async function deleteEmployee(
     await tx.delete(uploads).where(eq(uploads.createdBy, id));
     await tx.delete(sessions).where(eq(sessions.employeeId, id));
     await tx.delete(passwordTokens).where(eq(passwordTokens.employeeId, id));
+    // Team memberships and capabilities go with them (ON DELETE CASCADE)
     await tx.delete(employees).where(eq(employees.id, id));
   });
   await Promise.allSettled(leftovers.map((u) => storage.delete(u.key)));
@@ -83,28 +101,25 @@ export async function deleteCompany(db: Db, id: string): Promise<void> {
     .from(companies)
     .where(eq(companies.id, id));
   if (!company) throw notFound('Company');
-  if (await countOf(db.select({ n: count() }).from(workflows).where(eq(workflows.companyId, id)))) {
-    throw hasHistory(`Documents have been submitted for ${company.name}.`);
+  if (await countOf(db.select({ n: count() }).from(orders).where(eq(orders.companyId, id)))) {
+    throw hasHistory(`Orders exist for ${company.name}.`);
   }
-  // Its default approvers go with it (ON DELETE CASCADE)
+  // Its named people and gates go with it (ON DELETE CASCADE)
   await db.delete(companies).where(eq(companies.id, id));
 }
 
-export async function deleteRole(db: Db, id: string): Promise<void> {
-  const [role] = await db
-    .select({ name: roles.name, isSystem: roles.isSystem })
-    .from(roles)
-    .where(eq(roles.id, id));
-  if (!role) throw notFound('Role');
-  if (role.isSystem) throw conflict('SYSTEM_ROLE', 'Built-in roles cannot be deleted.');
-  const holders = await countOf(
-    db.select({ n: count() }).from(employeeRoles).where(eq(employeeRoles.roleId, id)),
-  );
-  if (holders > 0) {
-    throw conflict(
-      'ROLE_IN_USE',
-      `${holders} employee(s), active or inactive, still have the ${role.name} role. Move them to another role first.`,
-    );
+export async function deleteBuyer(db: Db, id: string): Promise<void> {
+  const [buyer] = await db.select({ name: buyers.name }).from(buyers).where(eq(buyers.id, id));
+  if (!buyer) throw notFound('Buyer');
+  if (
+    await countOf(
+      db
+        .select({ n: count() })
+        .from(orders)
+        .where(or(eq(orders.buyerId, id))),
+    )
+  ) {
+    throw hasHistory(`Orders exist for ${buyer.name}.`);
   }
-  await db.delete(roles).where(eq(roles.id, id));
+  await db.delete(buyers).where(eq(buyers.id, id));
 }

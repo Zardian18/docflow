@@ -18,14 +18,16 @@ describe.skipIf(!url)('database integration', () => {
     await runMigrations(env.DATABASE_URL);
     await runMigrations(env.DATABASE_URL);
     const { rows } = await pool.query(
-      `select column_name from information_schema.columns where table_name = 'roles'`,
+      `select column_name from information_schema.columns where table_name = 'tasks'`,
     );
-    expect(rows.map((r) => r.column_name)).toContain('permission');
+    expect(rows.map((r) => r.column_name)).toContain('holder_team');
   });
 
-  it('roles.permission rejects values outside the enum', async () => {
+  it('capabilities reject values outside the enum', async () => {
     await expect(
-      pool.query(`insert into roles (name, permission) values ('Bad', 'SUPERUSER')`),
+      pool.query(
+        `insert into employee_capabilities (employee_id, capability) values (gen_random_uuid(), 'SUPERUSER')`,
+      ),
     ).rejects.toThrow();
   });
 
@@ -34,6 +36,6 @@ describe.skipIf(!url)('database integration', () => {
     const res = await app.inject({ method: 'GET', url: '/v1/ping' });
     await app.close();
     expect(res.statusCode).toBe(200);
-    expect(PingResponse.parse(res.json()).roleCount).toBeGreaterThanOrEqual(0);
+    expect(PingResponse.parse(res.json()).employeeCount).toBeGreaterThanOrEqual(0);
   });
 });

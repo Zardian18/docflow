@@ -2,20 +2,21 @@ import { randomUUID } from 'node:crypto';
 import { PresignRequest, PresignResponse } from '@docflow/shared';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { uploads } from '../db/schema.js';
-import { currentUser, requirePermission } from '../plugins/auth.js';
+import { currentUser, requireUser } from '../plugins/auth.js';
 import type { StorageService } from '../storage/storage.js';
 import { perUserLimit, type RouteDeps } from './deps.js';
 
 /** How long the browser has to start the PUT. */
 const UPLOAD_URL_SECONDS = 10 * 60;
-/** How long an uploaded-but-unsubmitted file stays usable. */
+/** How long an uploaded-but-unattached file stays usable. */
 const UPLOAD_RECORD_HOURS = 24;
 
 export const uploadRoutes: FastifyPluginAsyncZod<RouteDeps & { storage: StorageService }> = async (
   app,
   { db, storage, limits },
 ) => {
-  app.addHook('onRequest', requirePermission('CREATOR'));
+  // Anyone signed in may upload; attaching the file to an order step checks who may act there
+  app.addHook('onRequest', requireUser);
 
   // The browser uploads straight to storage with this URL; bytes never pass through the API.
   // The URL is signed for this exact type and size, so storage refuses anything else (D20).
