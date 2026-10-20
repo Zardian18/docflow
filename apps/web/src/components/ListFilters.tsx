@@ -1,4 +1,4 @@
-import type { CompanyFacet } from '@docflow/shared';
+type CompanyFacet = { id: string; name: string };
 import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { SearchField, useDebounced } from '@/components/ListControls';
@@ -17,7 +17,7 @@ const ANY = 'any';
 const trigger =
   'bg-card h-9 w-full min-w-0 [&_[data-slot=select-value]]:block [&_[data-slot=select-value]]:truncate';
 
-function ChoiceSelect({
+export function ChoiceSelect({
   label,
   anyLabel,
   value,
@@ -47,7 +47,7 @@ function ChoiceSelect({
   );
 }
 
-function DateField({
+export function DateField({
   label,
   value,
   min,

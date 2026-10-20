@@ -1,70 +1,56 @@
 import {
-  ApproverOption,
-  ApproverSearchQuery,
-  CfoInfo,
   CompanyOption,
-  CompanySearchQuery,
+  IdParam,
+  PeopleSearchQuery,
+  PersonOption,
+  SlotAssignment,
 } from '@docflow/shared';
-import { and, asc, eq, ne, or, sql } from 'drizzle-orm';
+import { and, asc, eq, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { companies, employeeRoles, employees, roles } from '../db/schema.js';
-import { activeCfo, defaultApproversFor } from '../domain/chain.js';
-import { currentUser, requirePermission } from '../plugins/auth.js';
+import { buyers, companies, employeeCapabilities, employees } from '../db/schema.js';
+import { notFound } from '../errors.js';
+import { requireCapability, requireUser } from '../plugins/auth.js';
+import { slotsFor } from './companies.js';
 import type { RouteDeps } from './deps.js';
 import { prefixPattern } from './query-helpers.js';
 
-/** Type-ahead lookups shared by Admin (masters) and Creator (new submission). */
+/** Pickers: people who can fill a named slot, and the active buyers and companies. */
 export const lookupRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db }) => {
-  app.addHook('onRequest', requirePermission('ADMIN', 'CREATOR'));
-
-  // Approver picker: only active employees holding an active APPROVER role (D3, invariant 11),
-  // never the person searching: someone who is both Creator and Approver can't approve their
-  // own document (D23). Matches the start of the name, case-insensitively (URS §5.2).
   app.get(
-    '/v1/employees/approver-search',
-    { schema: { querystring: ApproverSearchQuery, response: { 200: ApproverOption.array() } } },
-    async (request) =>
+    '/v1/lookups/people',
+    {
+      onRequest: requireCapability('ADMIN', 'MARKETING'),
+      schema: { querystring: PeopleSearchQuery, response: { 200: PersonOption.array() } },
+    },
+    async ({ query }) =>
       db
-        .select({
-          id: employees.id,
-          name: employees.name,
-          email: employees.email,
-          roleName: roles.name,
-        })
+        .select({ id: employees.id, name: employees.name, email: employees.email })
         .from(employees)
-        .innerJoin(
-          employeeRoles,
-          and(eq(employeeRoles.employeeId, employees.id), eq(employeeRoles.permission, 'APPROVER')),
-        )
-        .innerJoin(roles, eq(roles.id, employeeRoles.roleId))
+        .innerJoin(employeeCapabilities, eq(employeeCapabilities.employeeId, employees.id))
         .where(
           and(
             eq(employees.isActive, true),
-            eq(roles.isActive, true),
-            ne(employees.id, currentUser(request).id),
-            request.query.q
-              ? sql`lower(${employees.name}) like ${prefixPattern(request.query.q)}`
-              : undefined,
+            eq(employeeCapabilities.capability, query.capability),
+            query.q ? sql`lower(${employees.name}) like ${prefixPattern(query.q)}` : undefined,
           ),
         )
         .orderBy(asc(sql`lower(${employees.name})`))
-        .limit(10),
+        .limit(20),
   );
 
-  // Company picker for New Submission: Active companies only, matching the start of the
-  // name OR the code (URS §5.2), with each company's default chain and the current CFO.
   app.get(
-    '/v1/companies/search',
+    '/v1/lookups/companies',
     {
+      onRequest: requireUser,
       schema: {
-        querystring: CompanySearchQuery,
-        response: { 200: z.object({ companies: CompanyOption.array(), cfo: CfoInfo.shape.cfo }) },
+        querystring: z.object({ q: z.string().trim().max(100).default('') }),
+        response: { 200: CompanyOption.array() },
       },
     },
     async ({ query }) => {
       const pattern = query.q ? prefixPattern(query.q) : undefined;
-      const rows = await db
+      return db
         .select({ id: companies.id, name: companies.name, code: companies.code })
         .from(companies)
         .where(
@@ -79,15 +65,52 @@ export const lookupRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db }
           ),
         )
         .orderBy(asc(sql`lower(${companies.name})`))
-        .limit(10);
-      const chains = await defaultApproversFor(
-        db,
-        rows.map((r) => r.id),
-      );
-      return {
-        companies: rows.map((r) => ({ ...r, approvers: chains.get(r.id) ?? [] })),
-        cfo: await activeCfo(db),
-      };
+        .limit(20);
     },
+  );
+
+  // The company's named people, to start a new order from (Marketing, Q61)
+  app.get(
+    '/v1/lookups/companies/:id/slots',
+    {
+      onRequest: requireCapability('ADMIN', 'MARKETING'),
+      schema: { params: IdParam, response: { 200: SlotAssignment.array() } },
+    },
+    async ({ params }) => {
+      const slots = (await slotsFor(db, [params.id])).get(params.id);
+      const [exists] = await db
+        .select({ id: companies.id })
+        .from(companies)
+        .where(eq(companies.id, params.id));
+      if (!exists || !slots) throw notFound('Company');
+      return slots;
+    },
+  );
+
+  app.get(
+    '/v1/lookups/buyers',
+    {
+      onRequest: requireUser,
+      schema: {
+        querystring: z.object({ q: z.string().trim().max(100).default('') }),
+        response: {
+          200: z.array(
+            z.object({ id: z.uuid(), name: z.string(), country: z.string().nullable() }),
+          ),
+        },
+      },
+    },
+    async ({ query }) =>
+      db
+        .select({ id: buyers.id, name: buyers.name, country: buyers.country })
+        .from(buyers)
+        .where(
+          and(
+            eq(buyers.isActive, true),
+            query.q ? sql`lower(${buyers.name}) like ${prefixPattern(query.q)}` : undefined,
+          ),
+        )
+        .orderBy(asc(sql`lower(${buyers.name})`))
+        .limit(20),
   );
 };

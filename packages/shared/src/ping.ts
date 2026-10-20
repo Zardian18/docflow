@@ -4,6 +4,6 @@ import { z } from 'zod';
 export const PingResponse = z.object({
   message: z.literal('pong'),
   dbTime: z.iso.datetime({ offset: true }),
-  roleCount: z.number().int().nonnegative(),
+  employeeCount: z.number().int().nonnegative(),
 });
 export type PingResponse = z.infer<typeof PingResponse>;

@@ -18,12 +18,11 @@ describe('api client', () => {
       name: 'A. Mehta',
       email: 'a@t.co',
       employeeCode: null,
-      roleName: 'Admin',
-      permission: 'ADMIN',
-      permissions: ['ADMIN'],
+      teams: [],
+      capabilities: ['ADMIN'],
     });
     await expect(api.auth.login({ email: 'a@t.co', password: 'x' })).resolves.toMatchObject({
-      permission: 'ADMIN',
+      capabilities: ['ADMIN'],
     });
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringMatching(/\/v1\/auth\/login$/),
@@ -36,11 +35,11 @@ describe('api client', () => {
   });
 
   it('turns error bodies into ApiError with code, message and details', async () => {
-    stubFetch(409, { error: 'CFO_EXISTS', message: 'V. Malhotra is already the active CFO.' });
-    const err = await api.roles.create({ name: 'x', permission: 'CFO' }).catch((e) => e);
+    stubFetch(409, { error: 'NAME_TAKEN', message: 'A buyer with this name already exists' });
+    const err = await api.buyers.create({ name: 'x' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
-    expect(err).toMatchObject({ status: 409, code: 'CFO_EXISTS' });
-    expect(errorMessage(err)).toBe('V. Malhotra is already the active CFO.');
+    expect(err).toMatchObject({ status: 409, code: 'NAME_TAKEN' });
+    expect(errorMessage(err)).toBe('A buyer with this name already exists');
   });
 
   it('calls the sign-out handler on 401, except for quiet requests', async () => {
@@ -49,7 +48,7 @@ describe('api client', () => {
     stubFetch(401, { error: 'UNAUTHORIZED', message: 'Please sign in' });
     await api.auth.me().catch(() => {});
     expect(handler).not.toHaveBeenCalled();
-    await api.roles.list({}).catch(() => {});
+    await api.buyers.list({}).catch(() => {});
     expect(handler).toHaveBeenCalledOnce();
   });
 

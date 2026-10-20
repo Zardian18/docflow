@@ -1,45 +1,39 @@
 import {
-  AdminStats,
-  AdminWorkflowRow,
   ApiErrorBody,
-  ApproverOption,
-  CfoInfo,
+  Buyer,
   Company,
   CompanyOption,
-  DecisionHistoryItem,
-  DecisionResult,
-  FileLink,
+  ComponentChange,
+  ComponentTables,
   Employee,
   Me,
+  OrderDetail,
+  OrderEvent,
+  OrderSummary,
   paginated,
   PasswordLink,
-  PendingApprovalsResponse,
+  PersonOption,
   PingResponse,
   PresignResponse,
-  RejectedBeforeFinalItem,
-  Role,
-  WorkflowDetail,
-  WorkflowSummary,
+  SlotAssignment,
+  WorkResponse,
+  type BuyerUpsert,
+  type Capability,
   type ChangePasswordRequest,
-  type AdminWorkflowQuery,
   type CompanyUpsert,
-  type DecisionRequest,
+  type ComponentInput,
   type EmployeeCreate,
+  type EmployeeListQuery,
   type EmployeeUpdate,
   type ListQuery,
   type LoginRequest,
-  type Permission,
-  type RoleCreate,
-  type RoleUpdate,
+  type OrderCreate,
+  type OrderListQuery,
   type PresignRequest,
-  type ReassignRequest,
   type SetPasswordRequest,
-  type WorkflowCreate,
-  filteredPage,
-  type DecisionHistoryQuery,
-  type MySubmissionsQuery,
-  type PendingQuery,
-  type RejectedBeforeFinalQuery,
+  type Slot,
+  type TaskActionRequest,
+  type WorkQuery,
 } from '@docflow/shared';
 import { z } from 'zod';
 
@@ -142,18 +136,8 @@ export const api = {
       request('/v1/auth/forgot-password', { method: 'POST', body: { email } }),
   },
 
-  roles: {
-    list: (query: Partial<ListQuery>, signal?: AbortSignal) =>
-      get(paginated(Role), `/v1/roles?${listParams(query)}`, signal),
-    create: (body: RoleCreate) =>
-      request('/v1/roles', { method: 'POST', body }).then((d) => Role.parse(d)),
-    remove: (id: string) => request(`/v1/roles/${id}`, { method: 'DELETE' }),
-    update: (id: string, body: RoleUpdate) =>
-      request(`/v1/roles/${id}`, { method: 'PUT', body }).then((d) => Role.parse(d)),
-  },
-
   employees: {
-    list: (query: Partial<ListQuery> & { permission?: Permission }, signal?: AbortSignal) =>
+    list: (query: Partial<EmployeeListQuery>, signal?: AbortSignal) =>
       get(paginated(Employee), `/v1/employees?${listParams(query)}`, signal),
     create: (body: EmployeeCreate) =>
       request('/v1/employees', { method: 'POST', body }).then((d) => Employee.parse(d)),
@@ -164,13 +148,6 @@ export const api = {
       request(`/v1/employees/${id}/password-link`, { method: 'POST', body: {} }).then((d) =>
         PasswordLink.parse(d),
       ),
-    approverSearch: (q: string, signal?: AbortSignal) =>
-      get(
-        ApproverOption.array(),
-        `/v1/employees/approver-search?q=${encodeURIComponent(q)}`,
-        signal,
-      ),
-    cfo: (signal?: AbortSignal) => get(CfoInfo, '/v1/employees/cfo', signal),
   },
 
   companies: {
@@ -183,57 +160,84 @@ export const api = {
     update: (id: string, body: CompanyUpsert) =>
       request(`/v1/companies/${id}`, { method: 'PUT', body }).then((d) => Company.parse(d)),
   },
+
+  buyers: {
+    list: (query: Partial<ListQuery>, signal?: AbortSignal) =>
+      get(paginated(Buyer), `/v1/buyers?${listParams(query)}`, signal),
+    create: (body: BuyerUpsert) =>
+      request('/v1/buyers', { method: 'POST', body }).then((d) => Buyer.parse(d)),
+    update: (id: string, body: BuyerUpsert) =>
+      request(`/v1/buyers/${id}`, { method: 'PUT', body }).then((d) => Buyer.parse(d)),
+    remove: (id: string) => request(`/v1/buyers/${id}`, { method: 'DELETE' }),
+  },
+
   lookups: {
+    people: (capability: Capability, q: string, signal?: AbortSignal) =>
+      get(PersonOption.array(), `/v1/lookups/people?${listParams({ capability, q })}`, signal),
     companies: (q: string, signal?: AbortSignal) =>
+      get(CompanyOption.array(), `/v1/lookups/companies?${listParams({ q })}`, signal),
+    companySlots: (id: string, signal?: AbortSignal) =>
+      get(SlotAssignment.array(), `/v1/lookups/companies/${id}/slots`, signal),
+    buyers: (q: string, signal?: AbortSignal) =>
       get(
-        z.object({ companies: CompanyOption.array(), cfo: CfoInfo.shape.cfo }),
-        `/v1/companies/search?q=${encodeURIComponent(q)}`,
+        z.array(z.object({ id: z.uuid(), name: z.string(), country: z.string().nullable() })),
+        `/v1/lookups/buyers?${listParams({ q })}`,
         signal,
       ),
   },
+
+  orders: {
+    create: (body: OrderCreate) =>
+      request('/v1/orders', { method: 'POST', body }).then((d) =>
+        z.object({ id: z.uuid() }).parse(d),
+      ),
+    list: (query: OrderListQuery, signal?: AbortSignal) =>
+      get(paginated(OrderSummary), `/v1/orders?${listParams(query)}`, signal),
+    get: (id: string, signal?: AbortSignal) => get(OrderDetail, `/v1/orders/${id}`, signal),
+    timeline: (id: string, signal?: AbortSignal) =>
+      get(OrderEvent.array(), `/v1/orders/${id}/timeline`, signal),
+    cancel: (id: string, reason: string) =>
+      request(`/v1/orders/${id}/cancel`, { method: 'POST', body: { reason } }),
+    replacePerson: (
+      id: string,
+      body: { slot: Slot; fromEmployeeId: string; toEmployeeId: string; reason: string },
+    ) => request(`/v1/orders/${id}/replace-person`, { method: 'POST', body }),
+    components: (id: string, signal?: AbortSignal) =>
+      get(ComponentTables, `/v1/orders/${id}/components`, signal),
+  },
+
+  tasks: {
+    act: (taskId: string, body: TaskActionRequest) =>
+      request(`/v1/tasks/${taskId}/actions`, { method: 'POST', body }),
+  },
+
+  components: {
+    add: (orderId: string, productId: string, body: ComponentInput) =>
+      request(`/v1/orders/${orderId}/products/${productId}/components`, { method: 'POST', body }),
+    update: (id: string, body: ComponentInput) =>
+      request(`/v1/components/${id}`, { method: 'PUT', body }),
+    remove: (id: string, comment?: string) =>
+      request(`/v1/components/${id}?${listParams({ comment })}`, { method: 'DELETE' }),
+    history: (id: string, signal?: AbortSignal) =>
+      get(ComponentChange.array(), `/v1/components/${id}/history`, signal),
+  },
+
+  documents: {
+    /** view: open a PDF or image in the browser; download: save it. */
+    fileLink: (id: string, mode: 'view' | 'download' = 'download') =>
+      get(
+        z.object({ url: z.url(), expiresAt: z.string() }),
+        `/v1/documents/${id}/file?mode=${mode}`,
+      ),
+  },
+
+  work: (query: WorkQuery, signal?: AbortSignal) =>
+    get(WorkResponse, `/v1/work?${listParams(query)}`, signal),
 
   uploads: {
     presign: (body: PresignRequest) =>
       request('/v1/uploads/presign', { method: 'POST', body }).then((d) =>
         PresignResponse.parse(d),
-      ),
-  },
-
-  workflows: {
-    create: (body: WorkflowCreate) =>
-      request('/v1/workflows', { method: 'POST', body }).then((d) =>
-        z.object({ id: z.uuid() }).parse(d),
-      ),
-    mine: (query: MySubmissionsQuery, signal?: AbortSignal) =>
-      get(filteredPage(WorkflowSummary), `/v1/workflows/mine?${listParams(query)}`, signal),
-    get: (id: string, signal?: AbortSignal) => get(WorkflowDetail, `/v1/workflows/${id}`, signal),
-    /** view: open a PDF in the browser; download: save it. */
-    fileLink: (id: string, mode: 'view' | 'download' = 'download') =>
-      get(FileLink, `/v1/workflows/${id}/file?mode=${mode}`),
-    decide: (id: string, body: DecisionRequest) =>
-      request(`/v1/workflows/${id}/decision`, { method: 'POST', body }).then((d) =>
-        DecisionResult.parse(d),
-      ),
-  },
-
-  admin: {
-    workflows: (query: AdminWorkflowQuery, signal?: AbortSignal) =>
-      get(paginated(AdminWorkflowRow), `/v1/admin/workflows?${listParams(query)}`, signal),
-    stats: (signal?: AbortSignal) => get(AdminStats, '/v1/admin/workflows/stats', signal),
-    reassign: (workflowId: string, stepId: string, body: ReassignRequest) =>
-      request(`/v1/workflows/${workflowId}/steps/${stepId}/reassign`, { method: 'POST', body }),
-  },
-
-  approvals: {
-    pending: (query: PendingQuery, signal?: AbortSignal) =>
-      get(PendingApprovalsResponse, `/v1/approvals/pending?${listParams(query)}`, signal),
-    history: (query: DecisionHistoryQuery, signal?: AbortSignal) =>
-      get(filteredPage(DecisionHistoryItem), `/v1/approvals/history?${listParams(query)}`, signal),
-    rejectedBeforeFinal: (query: RejectedBeforeFinalQuery, signal?: AbortSignal) =>
-      get(
-        filteredPage(RejectedBeforeFinalItem),
-        `/v1/approvals/rejected-before-final?${listParams(query)}`,
-        signal,
       ),
   },
 };

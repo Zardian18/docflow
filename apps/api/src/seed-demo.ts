@@ -1,4 +1,4 @@
-// Loads the demo data set. Usage:
+// Loads the v2 demo data set. Usage:
 //   pnpm --filter @docflow/api seed:demo          empty database (development, CI): adds a demo
 //                                                 Admin; every account uses DEMO_PASSWORD
 //   pnpm --filter @docflow/api seed:demo --live   the live site, right after reset:data: no demo
@@ -33,13 +33,12 @@ try {
   const password = values.live ? (reused ?? randomBytes(12).toString('base64url')) : DEMO_PASSWORD;
   const result = await seedDemo(db, storage, { password, withAdmin: !values.live });
   console.log(
-    `Seeded ${result.employees} active employees, ${result.companies} companies and ${result.workflows.length} documents.`,
+    `Seeded ${result.employees} people, ${result.companies} companies and ${result.orders} orders.`,
   );
-  const who = values.live ? 'cfo@, rahul@, priya@ ...' : 'admin@ (or cfo@, rahul@, priya@ ...)';
   if (values.live && reused) {
-    console.log(`Sign in as ${who}${DEMO_DOMAIN} with the password you gave.`);
+    console.log(`Demo accounts (<name>@${DEMO_DOMAIN}) use the password you gave.`);
   } else {
-    console.log(`Sign in as ${who}${DEMO_DOMAIN} with the password: ${password}`);
+    console.log(`Demo accounts (<name>@${DEMO_DOMAIN}) use the password: ${password}`);
     if (values.live) console.log('This password is shown only once. Store it now.');
   }
 } catch (err) {

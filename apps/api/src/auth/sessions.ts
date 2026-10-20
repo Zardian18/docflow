@@ -1,8 +1,7 @@
-import { byPriority, primaryPermission, type HeldRole, type Permission } from '@docflow/shared';
-import { and, eq, gt, isNull, ne } from 'drizzle-orm';
+import type { Capability, Team } from '@docflow/shared';
+import { and, eq, gt, isNull, ne, sql } from 'drizzle-orm';
 import type { DbOrTx } from '../db/client.js';
-import { employees, sessions } from '../db/schema.js';
-import { heldRoles } from '../domain/roles.js';
+import { employeeCapabilities, employees, sessions, teamMembers } from '../db/schema.js';
 import { hashToken, newToken } from './crypto.js';
 
 export interface AuthUser {
@@ -11,29 +10,23 @@ export interface AuthUser {
   name: string;
   email: string;
   employeeCode: string | null;
-  /** Role names joined, for display */
-  roleName: string;
-  /** The leading permission (Creator before Approver), which picks the landing page */
-  permission: Permission;
-  /** Every permission of the person's active roles, in priority order (D23) */
-  permissions: Permission[];
+  /** Team pools this person is in (any number, D24) */
+  teams: Team[];
+  /** What they may be named as, and Admin */
+  capabilities: Capability[];
 }
 
-/** The signed-in shape of a person, from their active roles (none means no access). */
-export function withRoles<T extends object>(
-  person: T,
-  held: HeldRole[],
-): (T & Pick<AuthUser, 'roleName' | 'permission' | 'permissions'>) | null {
-  if (held.length === 0) return null;
-  const sorted = byPriority(held);
-  const permissions = sorted.map((r) => r.permission);
-  return {
-    ...person,
-    roleName: sorted.map((r) => r.name).join(' + '),
-    permission: primaryPermission(permissions),
-    permissions,
-  };
-}
+// The outer row is named explicitly: in a single-table select the ORM writes a bare "id",
+// which inside a subquery would resolve to the subquery's own table
+const EMPLOYEE_ID = sql.raw('"employees"."id"');
+
+/** A person's teams and capabilities as arrays, for a select list */
+export const teamsOf = sql<Team[]>`coalesce(
+  (select array_agg(tm.team::text order by tm.team) from ${teamMembers} tm where tm.employee_id = ${EMPLOYEE_ID}),
+  '{}')`;
+export const capabilitiesOf = sql<Capability[]>`coalesce(
+  (select array_agg(ec.capability::text order by ec.capability) from ${employeeCapabilities} ec where ec.employee_id = ${EMPLOYEE_ID}),
+  '{}')`;
 
 export async function createSession(
   db: DbOrTx,
@@ -54,8 +47,8 @@ export async function createSession(
 }
 
 /**
- * Resolves a session token to its user. Permissions are read from the roles on every
- * request, so deactivating an employee or a role takes effect immediately.
+ * Resolves a session token to its user. Teams and capabilities are read on every request,
+ * so deactivating someone or changing their teams takes effect immediately.
  */
 export async function loadSession(db: DbOrTx, token: string): Promise<AuthUser | null> {
   const [row] = await db
@@ -65,7 +58,8 @@ export async function loadSession(db: DbOrTx, token: string): Promise<AuthUser |
       name: employees.name,
       email: employees.email,
       employeeCode: employees.employeeCode,
-      roles: heldRoles({ activeOnly: true }),
+      teams: teamsOf,
+      capabilities: capabilitiesOf,
     })
     .from(sessions)
     .innerJoin(employees, eq(employees.id, sessions.employeeId))
@@ -78,9 +72,7 @@ export async function loadSession(db: DbOrTx, token: string): Promise<AuthUser |
       ),
     )
     .limit(1);
-  if (!row) return null;
-  const { roles: held, ...person } = row;
-  return withRoles(person, held);
+  return row ?? null;
 }
 
 export async function revokeSession(db: DbOrTx, sessionId: string): Promise<void> {

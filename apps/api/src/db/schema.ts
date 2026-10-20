@@ -3,7 +3,6 @@ import {
   boolean,
   check,
   date,
-  foreignKey,
   index,
   integer,
   jsonb,
@@ -16,7 +15,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { PERMISSIONS, STEP_STATUSES, WORKFLOW_STATUSES } from '@docflow/shared';
+import { CAPABILITIES, CHANNELS, DOC_KINDS, GATES, SLOTS, TAGS, TEAMS } from '@docflow/shared';
 
 const id = () =>
   uuid('id')
@@ -24,28 +23,20 @@ const id = () =>
     .default(sql`gen_random_uuid()`);
 const createdAt = () => timestamp('created_at', { withTimezone: true }).notNull().defaultNow();
 const updatedAt = () => timestamp('updated_at', { withTimezone: true }).notNull().defaultNow();
+// clock_timestamp(), not now(): several rows in one transaction keep their order
+const happenedAt = (name: string) =>
+  timestamp(name, { withTimezone: true })
+    .notNull()
+    .default(sql`clock_timestamp()`);
 
-export const permissionEnum = pgEnum('permission', PERMISSIONS);
 export const passwordTokenPurpose = pgEnum('password_token_purpose', ['SET', 'RESET']);
 
-// plan.md §4.1 — custom-named roles, each carrying one mandatory permission (D3)
-export const roles = pgTable(
-  'roles',
-  {
-    id: id(),
-    name: text('name').notNull(),
-    permission: permissionEnum('permission').notNull(),
-    isSystem: boolean('is_system').notNull().default(false),
-    isActive: boolean('is_active').notNull().default(true),
-    createdAt: createdAt(),
-    updatedAt: updatedAt(),
-  },
-  (t) => [
-    uniqueIndex('roles_name_lower_unique').on(sql`lower(${t.name})`),
-    // Target of employee_roles' (role_id, permission) key, so the copied permission can't drift
-    uniqueIndex('roles_id_permission_unique').on(t.id, t.permission),
-  ],
-);
+// ---- People (D24: teams are pools, capabilities are what someone may be named as) ----------
+
+export const teamEnum = pgEnum('team', TEAMS);
+export const capabilityEnum = pgEnum('capability', CAPABILITIES);
+export const slotEnum = pgEnum('slot', SLOTS);
+export const gateEnum = pgEnum('gate', GATES);
 
 export const employees = pgTable(
   'employees',
@@ -58,61 +49,42 @@ export const employees = pgTable(
     email: text('email').notNull(),
     passwordHash: text('password_hash'),
     isActive: boolean('is_active').notNull().default(true),
-    // True when one of their roles is a CFO role, so the DB can enforce a single active CFO
-    isCfo: boolean('is_cfo').notNull().default(false),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
   (t) => [
     uniqueIndex('employees_email_unique').on(t.email),
     uniqueIndex('employees_code_unique').on(t.employeeCode),
-    uniqueIndex('employees_one_active_cfo')
-      .on(t.isCfo)
-      .where(sql`${t.isCfo} and ${t.isActive}`),
     index('employees_name_lower_idx').on(sql`lower(${t.name}) text_pattern_ops`),
   ],
 );
 
-/**
- * A person's roles (D23): one role, or one Creator-type plus one Approver-type role. The
- * permission is copied from the role (it never changes) so "at most one role per permission"
- * is a unique key. Admin and CFO roles being someone's only role is enforced by the API.
- */
-export const employeeRoles = pgTable(
-  'employee_roles',
+/** Any number of teams per person, with no exclusions (D24 retires D23). */
+export const teamMembers = pgTable(
+  'team_members',
   {
     employeeId: uuid('employee_id')
       .notNull()
       .references(() => employees.id, { onDelete: 'cascade' }),
-    roleId: uuid('role_id').notNull(),
-    permission: permissionEnum('permission').notNull(),
+    team: teamEnum('team').notNull(),
   },
   (t) => [
-    primaryKey({ columns: [t.employeeId, t.roleId] }),
-    uniqueIndex('employee_roles_one_per_permission').on(t.employeeId, t.permission),
-    index('employee_roles_role_idx').on(t.roleId),
-    foreignKey({
-      name: 'employee_roles_role_fk',
-      columns: [t.roleId, t.permission],
-      foreignColumns: [roles.id, roles.permission],
-    }),
+    primaryKey({ columns: [t.employeeId, t.team] }),
+    index('team_members_team_idx').on(t.team),
   ],
 );
 
-/** Pairs of roles nobody may hold together. Stored in both directions (exclusions are mutual). */
-export const roleExclusions = pgTable(
-  'role_exclusions',
+export const employeeCapabilities = pgTable(
+  'employee_capabilities',
   {
-    roleId: uuid('role_id')
+    employeeId: uuid('employee_id')
       .notNull()
-      .references(() => roles.id, { onDelete: 'cascade' }),
-    excludedRoleId: uuid('excluded_role_id')
-      .notNull()
-      .references(() => roles.id, { onDelete: 'cascade' }),
+      .references(() => employees.id, { onDelete: 'cascade' }),
+    capability: capabilityEnum('capability').notNull(),
   },
   (t) => [
-    primaryKey({ columns: [t.roleId, t.excludedRoleId] }),
-    check('role_exclusions_not_self', sql`${t.roleId} <> ${t.excludedRoleId}`),
+    primaryKey({ columns: [t.employeeId, t.capability] }),
+    index('employee_capabilities_capability_idx').on(t.capability),
   ],
 );
 
@@ -155,6 +127,8 @@ export const passwordTokens = pgTable(
   ],
 );
 
+// ---- Masters ----------------------------------------------------------------
+
 export const companies = pgTable(
   'companies',
   {
@@ -172,32 +146,54 @@ export const companies = pgTable(
   ],
 );
 
-// position may repeat within a company: a repeated value is a parallel group (D1)
-export const companyDefaultApprovers = pgTable(
-  'company_default_approvers',
+/** Who fills each named slot for a company's orders (Q60), in order. */
+export const companySlotPeople = pgTable(
+  'company_slot_people',
   {
-    id: id(),
     companyId: uuid('company_id')
       .notNull()
       .references(() => companies.id, { onDelete: 'cascade' }),
+    slot: slotEnum('slot').notNull(),
     employeeId: uuid('employee_id')
       .notNull()
       .references(() => employees.id),
-    position: integer('position').notNull(),
+    ordinal: integer('ordinal').notNull(),
   },
   (t) => [
-    uniqueIndex('company_default_approvers_unique').on(t.companyId, t.employeeId),
-    index('company_default_approvers_employee_idx').on(t.employeeId),
-    check('company_default_approvers_position_positive', sql`${t.position} > 0`),
+    primaryKey({ columns: [t.companyId, t.slot, t.employeeId] }),
+    index('company_slot_people_employee_idx').on(t.employeeId),
   ],
 );
 
-// ---- Phase 3: uploads and workflows (plan.md §4.1) -------------------------
+/** ALL/ANY per approval slot, per company. Missing = ALL. */
+export const companySlotGates = pgTable(
+  'company_slot_gates',
+  {
+    companyId: uuid('company_id')
+      .notNull()
+      .references(() => companies.id, { onDelete: 'cascade' }),
+    slot: slotEnum('slot').notNull(),
+    gate: gateEnum('gate').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.companyId, t.slot] })],
+);
 
-export const workflowStatusEnum = pgEnum('workflow_status', WORKFLOW_STATUSES);
-export const stepStatusEnum = pgEnum('step_status', STEP_STATUSES);
+export const buyers = pgTable(
+  'buyers',
+  {
+    id: id(),
+    name: text('name').notNull(),
+    country: text('country'),
+    address: text('address'),
+    contact: text('contact'),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('buyers_name_lower_unique').on(sql`lower(${t.name})`)],
+);
 
-/** A presigned upload, before it becomes a workflow. One upload backs at most one workflow. */
+/** A presigned upload, before it is attached to an order as a document. */
 export const uploads = pgTable(
   'uploads',
   {
@@ -219,136 +215,374 @@ export const uploads = pgTable(
   ],
 );
 
-export const workflows = pgTable(
-  'workflows',
+// ---- Orders (the runtime of a workflow template) ------------------------------------------
+
+export const orderStatusEnum = pgEnum('order_status', [
+  'ACTIVE',
+  'NO_ACTION_NEEDED',
+  'DONE',
+  'CANCELLED',
+]);
+
+export const orders = pgTable(
+  'orders',
   {
     id: id(),
-    uploadId: uuid('upload_id')
+    // Human reference, e.g. ORD-0007
+    number: integer('number').generatedAlwaysAsIdentity().notNull(),
+    buyerId: uuid('buyer_id')
       .notNull()
-      .references(() => uploads.id),
-    title: text('title').notNull(),
+      .references(() => buyers.id),
+    companyId: uuid('company_id')
+      .notNull()
+      .references(() => companies.id),
+    // Pinned workflow template; editing a template never changes this order (D24)
+    templateKey: text('template_key').notNull(),
+    templateVersion: integer('template_version').notNull(),
+    status: orderStatusEnum('status').notNull().default('ACTIVE'),
+    notes: text('notes'),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => employees.id),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    // Tracker B anchor: the buyer confirmed the CBM (Q13)
+    chainStartedAt: timestamp('chain_started_at', { withTimezone: true }),
+    // Tracker A anchor: Accounts verified the advance (C3)
+    productionStartedAt: timestamp('production_started_at', { withTimezone: true }),
+    closedAt: timestamp('closed_at', { withTimezone: true }),
+    cancelReason: text('cancel_reason'),
+  },
+  (t) => [
+    uniqueIndex('orders_number_unique').on(t.number),
+    index('orders_buyer_idx').on(t.buyerId),
+    index('orders_company_idx').on(t.companyId),
+    index('orders_status_idx').on(t.status),
+  ],
+);
+
+/** The named people on this order, copied from the company at creation (Q61) */
+export const orderSlotPeople = pgTable(
+  'order_slot_people',
+  {
+    orderId: uuid('order_id')
+      .notNull()
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    slot: slotEnum('slot').notNull(),
+    employeeId: uuid('employee_id')
+      .notNull()
+      .references(() => employees.id),
+    ordinal: integer('ordinal').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.orderId, t.slot, t.employeeId] }),
+    index('order_slot_people_employee_idx').on(t.employeeId),
+  ],
+);
+
+export const orderSlotGates = pgTable(
+  'order_slot_gates',
+  {
+    orderId: uuid('order_id')
+      .notNull()
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    slot: slotEnum('slot').notNull(),
+    gate: gateEnum('gate').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.orderId, t.slot] })],
+);
+
+export const orderProducts = pgTable(
+  'order_products',
+  {
+    id: id(),
+    orderId: uuid('order_id')
+      .notNull()
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    position: integer('position').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('order_products_order_idx').on(t.orderId, t.position)],
+);
+
+export const tagEnum = pgEnum('task_tag', TAGS);
+export const taskStatusEnum = pgEnum('task_status', ['WAITING', 'OPEN', 'DONE', 'CANCELLED']);
+
+/**
+ * One task per step of the template, per product for per-product steps. `holder*` says who
+ * has the ball right now; every change of holder is also a row in holder_intervals.
+ */
+export const tasks = pgTable(
+  'tasks',
+  {
+    id: id(),
+    orderId: uuid('order_id')
+      .notNull()
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    productId: uuid('product_id').references(() => orderProducts.id, { onDelete: 'cascade' }),
+    stepKey: text('step_key').notNull(),
+    // The step's phase, copied from the template, so visibility can be decided in SQL
+    phase: integer('phase').notNull(),
+    status: taskStatusEnum('status').notNull().default('WAITING'),
+    tag: tagEnum('tag'),
+    // Review loops: SUBMITTER or REVIEWER; approval chains: the stage key
+    side: text('side'),
+    // Approval chains: which run (a restart after a rejection is a new run)
+    run: integer('run').notNull().default(1),
+    holderTeam: teamEnum('holder_team'),
+    holderSlot: slotEnum('holder_slot'),
+    openedAt: timestamp('opened_at', { withTimezone: true }),
+    doneAt: timestamp('done_at', { withTimezone: true }),
+    doneBy: uuid('done_by').references(() => employees.id),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex('tasks_step_unique').on(
+      t.orderId,
+      t.stepKey,
+      sql`coalesce(${t.productId}, '00000000-0000-0000-0000-000000000000'::uuid)`,
+    ),
+    index('tasks_open_team_idx')
+      .on(t.holderTeam)
+      .where(sql`${t.status} = 'OPEN'`),
+    index('tasks_open_slot_idx')
+      .on(t.holderSlot)
+      .where(sql`${t.status} = 'OPEN'`),
+    check(
+      'tasks_one_holder',
+      sql`not (${t.holderTeam} is not null and ${t.holderSlot} is not null)`,
+    ),
+  ],
+);
+
+/**
+ * Every period a task sat with one holder. Source of Tracker C and of "waiting since".
+ * `reason` says why it started: OPENED, RETURNED, SUBMITTED, NEXT_STAGE, RESTARTED, REOPENED.
+ */
+export const holderIntervals = pgTable(
+  'holder_intervals',
+  {
+    id: id(),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    orderId: uuid('order_id')
+      .notNull()
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    holderTeam: teamEnum('holder_team'),
+    holderSlot: slotEnum('holder_slot'),
+    reason: text('reason').notNull(),
+    startedAt: happenedAt('started_at'),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('holder_intervals_task_idx').on(t.taskId, t.startedAt),
+    uniqueIndex('holder_intervals_one_open')
+      .on(t.taskId)
+      .where(sql`${t.endedAt} is null`),
+  ],
+);
+
+export const voteEnum = pgEnum('vote', ['APPROVE', 'REJECT']);
+
+export const approvalVotes = pgTable(
+  'approval_votes',
+  {
+    id: id(),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    run: integer('run').notNull(),
+    stage: text('stage').notNull(),
+    employeeId: uuid('employee_id')
+      .notNull()
+      .references(() => employees.id),
+    vote: voteEnum('vote').notNull(),
+    comment: text('comment'),
+    createdAt: happenedAt('created_at'),
+  },
+  (t) => [uniqueIndex('approval_votes_once').on(t.taskId, t.run, t.stage, t.employeeId)],
+);
+
+export const channelEnum = pgEnum('channel', CHANNELS);
+export const verdictEnum = pgEnum('verdict', ['CONFIRMED', 'RETURNED']);
+
+/**
+ * One round of a review loop: a submission (absent for a loop that starts with the reviewer)
+ * and the reviewer's verdict. Queried per channel kind ("all annexure revisions").
+ */
+export const channelRounds = pgTable(
+  'channel_rounds',
+  {
+    id: id(),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'cascade' }),
+    orderId: uuid('order_id')
+      .notNull()
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    channel: channelEnum('channel').notNull(),
+    round: integer('round').notNull(),
+    submittedBy: uuid('submitted_by').references(() => employees.id),
+    submittedAt: timestamp('submitted_at', { withTimezone: true }),
+    submitComment: text('submit_comment'),
+    verdict: verdictEnum('verdict'),
+    verdictBy: uuid('verdict_by').references(() => employees.id),
+    verdictAt: timestamp('verdict_at', { withTimezone: true }),
+    verdictComment: text('verdict_comment'),
+    // Production QA: which team the work went back to
+    returnedToTeam: teamEnum('returned_to_team'),
+  },
+  (t) => [
+    uniqueIndex('channel_rounds_unique').on(t.taskId, t.round),
+    index('channel_rounds_order_channel_idx').on(t.orderId, t.channel),
+  ],
+);
+
+export const docKindEnum = pgEnum('doc_kind', DOC_KINDS);
+
+export const documents = pgTable(
+  'documents',
+  {
+    id: id(),
+    orderId: uuid('order_id')
+      .notNull()
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    roundId: uuid('round_id').references(() => channelRounds.id, { onDelete: 'set null' }),
+    kind: docKindEnum('kind').notNull(),
     fileKey: text('file_key').notNull(),
     fileName: text('file_name').notNull(),
     fileMime: text('file_mime').notNull(),
     fileSize: integer('file_size').notNull(),
     fileSha256: text('file_sha256').notNull(),
-    companyId: uuid('company_id')
-      .notNull()
-      .references(() => companies.id),
-    createdBy: uuid('created_by')
+    uploadedBy: uuid('uploaded_by')
       .notNull()
       .references(() => employees.id),
-    status: workflowStatusEnum('status').notNull(),
-    currentPosition: integer('current_position').notNull(),
-    chainCustomised: boolean('chain_customised').notNull(),
-    submittedAt: timestamp('submitted_at', { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: updatedAt(),
-    version: integer('version').notNull().default(1),
-    // Invoice fields (decisions.md D6), all optional
-    invoiceNumber: text('invoice_number'),
-    vendorName: text('vendor_name'),
-    invoiceDate: date('invoice_date', { mode: 'string' }),
-    amount: numeric('amount', { precision: 14, scale: 2 }),
-    currency: text('currency').notNull().default('INR'),
-    notes: text('notes'),
+    uploadedAt: happenedAt('uploaded_at'),
   },
   (t) => [
-    uniqueIndex('workflows_upload_unique').on(t.uploadId),
-    index('workflows_created_by_idx').on(t.createdBy, t.submittedAt),
-    index('workflows_company_idx').on(t.companyId),
-    index('workflows_status_idx').on(t.status),
-    // Admin Dashboard default view: newest first, id as tie-breaker (EXPLAIN in PR for Phase 6)
-    // Ascending: Postgres scans it backwards for the default newest-first order
-    index('workflows_submitted_idx').on(t.submittedAt, t.id),
+    index('documents_order_idx').on(t.orderId, t.kind),
+    uniqueIndex('documents_file_key_unique').on(t.fileKey),
   ],
 );
 
-/**
- * The chain snapshot (invariant 2): names and emails are copied at submit so history stays
- * readable after master edits. A repeated position is a parallel group (D1); the CFO row is
- * always the highest position and alone.
- */
-export const workflowSteps = pgTable(
-  'workflow_steps',
+export const paymentKindEnum = pgEnum('payment_kind', ['ADVANCE', 'BALANCE']);
+
+export const payments = pgTable(
+  'payments',
   {
     id: id(),
-    workflowId: uuid('workflow_id')
+    orderId: uuid('order_id')
       .notNull()
-      .references(() => workflows.id),
-    position: integer('position').notNull(),
-    employeeId: uuid('employee_id')
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    kind: paymentKindEnum('kind').notNull(),
+    receivedOn: date('received_on').notNull(),
+    amount: numeric('amount', { precision: 14, scale: 2 }).notNull(),
+    currency: text('currency').notNull(),
+    reference: text('reference'),
+    verifiedBy: uuid('verified_by')
       .notNull()
       .references(() => employees.id),
-    employeeName: text('employee_name').notNull(),
-    employeeEmail: text('employee_email').notNull(),
-    isCfo: boolean('is_cfo').notNull().default(false),
-    status: stepStatusEnum('status').notNull(),
-    /** When this step became PENDING (drives “Waiting since”). */
-    activatedAt: timestamp('activated_at', { withTimezone: true }),
-    decidedAt: timestamp('decided_at', { withTimezone: true }),
-    remarks: text('remarks'),
+    verifiedAt: happenedAt('verified_at'),
+    comment: text('comment'),
   },
-  (t) => [
-    uniqueIndex('workflow_steps_unique').on(t.workflowId, t.employeeId),
-    index('workflow_steps_workflow_position_idx').on(t.workflowId, t.position),
-    index('workflow_steps_employee_status_idx').on(t.employeeId, t.status),
-    check('workflow_steps_position_positive', sql`${t.position} > 0`),
-  ],
+  (t) => [index('payments_order_idx').on(t.orderId)],
 );
 
-/** Append-only (invariant 7): a trigger rejects UPDATE and DELETE (see migration). */
-export const auditEvents = pgTable(
-  'audit_events',
+export const componentKindEnum = pgEnum('component_kind', TAGS);
+
+/** The per-product tracking table (brief Phase 2, D24 field list). Delivered = deliver_date set. */
+export const orderComponents = pgTable(
+  'order_components',
   {
     id: id(),
-    workflowId: uuid('workflow_id')
+    orderId: uuid('order_id')
       .notNull()
-      .references(() => workflows.id),
-    actorId: uuid('actor_id').references(() => employees.id),
-    eventType: text('event_type').notNull(),
-    payload: jsonb('payload').notNull().default({}),
-    // clock_timestamp(), not now(): several events in one transaction must keep their order
-    createdAt: timestamp('created_at', { withTimezone: true })
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    productId: uuid('product_id')
       .notNull()
-      .default(sql`clock_timestamp()`),
-  },
-  (t) => [index('audit_events_workflow_idx').on(t.workflowId, t.createdAt)],
-);
-
-// ---- Phase 4: notifications outbox (plan.md §2.4, invariants 6 and 10) ------
-
-export const outboxStatusEnum = pgEnum('outbox_status', ['pending', 'sent', 'failed', 'skipped']);
-
-/**
- * Written in the same transaction as the decision that causes it; delivery is attempted
- * synchronously right after commit, and the cron tick retries only pending/failed rows.
- */
-export const notificationOutbox = pgTable(
-  'notification_outbox',
-  {
-    id: id(),
-    workflowId: uuid('workflow_id')
-      .notNull()
-      .references(() => workflows.id),
-    recipientId: uuid('recipient_id')
-      .notNull()
-      .references(() => employees.id),
-    toEmail: text('to_email').notNull(),
-    template: text('template').notNull(),
-    payload: jsonb('payload').notNull().default({}),
-    status: outboxStatusEnum('status').notNull().default('pending'),
-    attempts: integer('attempts').notNull().default(0),
-    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull().defaultNow(),
-    sentAt: timestamp('sent_at', { withTimezone: true }),
-    lastError: text('last_error'),
-    dedupeKey: text('dedupe_key').notNull(),
+      .references(() => orderProducts.id, { onDelete: 'cascade' }),
+    srNo: integer('sr_no').notNull(),
+    name: text('name').notNull(),
+    kind: componentKindEnum('kind').notNull(),
+    poQuantity: text('po_quantity'),
+    orderQuantity: text('order_quantity'),
+    poDate: date('po_date'),
+    dispatchDate: date('dispatch_date'),
+    deliverDate: date('deliver_date'),
+    lrDetails: text('lr_details'),
+    challanNo: text('challan_no'),
+    tridentRemark: text('trident_remark'),
+    tnsRemark: text('tns_remark'),
     createdAt: createdAt(),
+    updatedAt: updatedAt(),
   },
-  (t) => [
-    uniqueIndex('notification_outbox_dedupe_unique').on(t.dedupeKey),
-    index('notification_outbox_due_idx')
-      .on(t.nextAttemptAt)
-      .where(sql`${t.status} in ('pending', 'failed')`),
-    index('notification_outbox_workflow_idx').on(t.workflowId),
-  ],
+  (t) => [index('order_components_product_idx').on(t.productId, t.srNo)],
+);
+
+/** Every edit to a component row: who, when, what changed (Q39) */
+export const componentChanges = pgTable(
+  'component_changes',
+  {
+    id: id(),
+    componentId: uuid('component_id').notNull(),
+    orderId: uuid('order_id')
+      .notNull()
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    productId: uuid('product_id').notNull(),
+    actorId: uuid('actor_id')
+      .notNull()
+      .references(() => employees.id),
+    field: text('field').notNull(),
+    oldValue: text('old_value'),
+    newValue: text('new_value'),
+    comment: text('comment'),
+    createdAt: happenedAt('created_at'),
+  },
+  (t) => [index('component_changes_component_idx').on(t.componentId, t.createdAt)],
+);
+
+export const shipmentCheckpoints = pgTable(
+  'shipment_checkpoints',
+  {
+    id: id(),
+    orderId: uuid('order_id')
+      .notNull()
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    status: text('status').notNull(),
+    note: text('note'),
+    happenedOn: date('happened_on').notNull(),
+    loggedBy: uuid('logged_by')
+      .notNull()
+      .references(() => employees.id),
+    loggedAt: happenedAt('logged_at'),
+  },
+  (t) => [index('shipment_checkpoints_order_idx').on(t.orderId, t.loggedAt)],
+);
+
+/**
+ * Everything tracked about an order: actor, what they acted as, when, comment, details.
+ * Append-only (a trigger refuses UPDATE and DELETE, as v1's audit_events did).
+ */
+export const orderEvents = pgTable(
+  'order_events',
+  {
+    id: id(),
+    orderId: uuid('order_id')
+      .notNull()
+      .references(() => orders.id),
+    taskId: uuid('task_id'),
+    stepKey: text('step_key'),
+    actorId: uuid('actor_id').references(() => employees.id),
+    // The team, slot or ADMIN the actor acted as
+    actingAs: text('acting_as'),
+    type: text('type').notNull(),
+    comment: text('comment'),
+    details: jsonb('details').notNull().default({}),
+    createdAt: happenedAt('created_at'),
+  },
+  (t) => [index('order_events_order_idx').on(t.orderId, t.createdAt)],
 );

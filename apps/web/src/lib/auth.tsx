@@ -1,9 +1,10 @@
-import type { Me, Permission } from '@docflow/shared';
+import type { Capability, Me } from '@docflow/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { Navigate, useLocation } from 'react-router';
 import { api, ApiError } from './api';
 import { FullPageSpinner } from '@/components/FullPageSpinner';
+import { homeFor } from './people';
 
 export const meQueryKey = ['auth', 'me'] as const;
 
@@ -25,14 +26,6 @@ export function useMe() {
   });
 }
 
-/** Where each permission lands after signing in (someone with two roles uses `me.permission`, the leading one). */
-export const HOME_BY_PERMISSION: Record<Permission, string> = {
-  ADMIN: '/admin',
-  CREATOR: '/submit',
-  APPROVER: '/approvals',
-  CFO: '/final-approvals',
-};
-
 export function useSignOutLocally() {
   const queryClient = useQueryClient();
   return () => {
@@ -46,7 +39,7 @@ export function RequireAuth({
   allow,
   children,
 }: {
-  allow?: Permission[];
+  allow?: Capability[];
   children: (me: Me) => ReactNode;
 }) {
   const me = useMe();
@@ -58,8 +51,8 @@ export function RequireAuth({
     const next = `${location.pathname}${location.search}`;
     return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />;
   }
-  if (allow && !me.data.permissions.some((p) => allow.includes(p))) {
-    return <Navigate to={HOME_BY_PERMISSION[me.data.permission]} replace />;
+  if (allow && !me.data.capabilities.some((c) => allow.includes(c))) {
+    return <Navigate to={homeFor(me.data)} replace />;
   }
   return children(me.data);
 }

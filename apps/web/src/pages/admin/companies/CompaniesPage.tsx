@@ -1,4 +1,4 @@
-import type { Company } from '@docflow/shared';
+import { SLOT_INFO, type Company } from '@docflow/shared';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { Link } from 'react-router';
@@ -10,7 +10,6 @@ import { ActivePill } from '@/components/StatusPill';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 import { MastersTabs } from '../MastersLayout';
-import { ChainSummary } from '@/components/chain/ChainSummary';
 
 export function CompaniesPage() {
   const list = useListState();
@@ -33,10 +32,27 @@ export function CompaniesPage() {
       cell: (c) => <span className="text-muted-foreground">{c.code ?? '—'}</span>,
     },
     {
-      key: 'chain',
-      header: 'Default Approvers (in order)',
+      key: 'people',
+      header: 'Named people',
       className: 'min-w-64',
-      cell: (c) => <ChainSummary approvers={c.approvers} />,
+      cell: (c) => {
+        const missing = c.slots.filter((s) => s.people.length === 0).length;
+        const marketing = c.slots.find((s) => s.slot === 'MARKETING')?.people[0]?.name;
+        return (
+          <span className="flex flex-col text-[13px]">
+            <span>
+              {marketing ? `${SLOT_INFO.MARKETING.label}: ${marketing}` : 'No Marketing person yet'}
+            </span>
+            <span
+              className={missing ? 'text-status-amber text-xs' : 'text-muted-foreground text-xs'}
+            >
+              {missing
+                ? `${missing} slot${missing === 1 ? '' : 's'} still empty`
+                : 'Everyone named'}
+            </span>
+          </span>
+        );
+      },
     },
     { key: 'status', header: 'Status', cell: (c) => <ActivePill active={c.isActive} /> },
     {
@@ -46,7 +62,7 @@ export function CompaniesPage() {
       className: 'w-20 text-right',
       cell: (c) => (
         <Button variant="outline" size="sm" asChild>
-          <Link to={`/admin/masters/companies/${c.id}`} aria-label={`Edit ${c.name}`}>
+          <Link to={`/admin/companies/${c.id}`} aria-label={`Edit ${c.name}`}>
             Edit
           </Link>
         </Button>
@@ -61,7 +77,7 @@ export function CompaniesPage() {
         description="Manage companies and their default approval chains"
         actions={
           <Button asChild>
-            <Link to="/admin/masters/companies/new">
+            <Link to="/admin/companies/new">
               <Plus aria-hidden /> Add Company
             </Link>
           </Button>
@@ -91,7 +107,7 @@ export function CompaniesPage() {
               <EmptyState title="No companies match">Try a different search or status.</EmptyState>
             ) : (
               <EmptyState title="No companies yet">
-                Add a company and its default approvers so Creators can start submitting documents.
+                Add a company and name its people, so Marketing can start orders for it.
               </EmptyState>
             )
           }
@@ -105,8 +121,9 @@ export function CompaniesPage() {
           />
         )}
         <p className="text-muted-foreground mt-4 text-[13px]">
-          Only Admin can create, edit, or reorder a company’s default approvers. A company needs at
-          least 2 approvers before the CFO. The CFO is always last and fixed.
+          Each company names who approves its orders, and whether every Head Approver must approve
+          or any one is enough. Orders copy these when they are created; later changes don’t affect
+          them.
         </p>
       </PageBody>
     </>

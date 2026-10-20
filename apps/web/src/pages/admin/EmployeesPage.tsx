@@ -1,10 +1,13 @@
 import {
+  CAPABILITIES,
+  CAPABILITY_LABEL,
   EmployeeUpdate,
-  roleSetProblem,
+  TEAM_LABEL,
+  TEAMS,
+  type Capability,
   type Employee,
-  type HeldRole,
   type PasswordLink,
-  type Role,
+  type Team,
 } from '@docflow/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -40,78 +43,54 @@ import {
 } from '@/components/ui/select';
 import { api, errorMessage } from '@/lib/api';
 import { MastersTabs } from './MastersLayout';
-import { PERMISSION_LABEL } from './permissions';
 
 type FormValues = z.input<typeof EmployeeUpdate>;
 
-/** "Accounts Creator · Creator": the permission is added when the name doesn't say it */
-function RoleName({ role }: { role: HeldRole }) {
-  return (
-    <>
-      {role.name}
-      {role.name !== PERMISSION_LABEL[role.permission] && (
-        <span className="text-muted-foreground text-xs">
-          {' '}
-          · {PERMISSION_LABEL[role.permission]}
-        </span>
-      )}
-    </>
-  );
-}
+const CAPABILITY_HINT: Record<Capability, string> = {
+  ADMIN: 'Manages employees, companies and buyers, and sees every order',
+  MARKETING: 'Creates orders and is named on them',
+  CREATOR: 'Drafts the CBM and the PI',
+  APPROVER: 'Can be named as an Approver',
+  HEAD_APPROVER: 'Can be named as a Head Approver',
+};
 
-/**
- * Roles picker (D23): one role, or one Creator role plus one Approver role. A role that can't
- * join the current choice is disabled with the reason, using the same rule as the server.
- */
-function RolesField({
-  roles,
-  held,
-  value,
-  onChange,
+/** Teams and what someone may be named as: any combination (D24). */
+function AccessFields({
+  teams,
+  capabilities,
+  onTeams,
+  onCapabilities,
   error,
 }: {
-  roles: Role[];
-  held: HeldRole[];
-  value: string[];
-  onChange: (v: string[]) => void;
+  teams: Team[];
+  capabilities: Capability[];
+  onTeams: (t: Team[]) => void;
+  onCapabilities: (c: Capability[]) => void;
   error?: string;
 }) {
-  // Roles the person holds that have since been deactivated still show, so they can be removed
-  const inactiveHeld = held
-    .filter((h) => !roles.some((r) => r.id === h.id))
-    .map((h) => ({ ...h, isActive: false, excludedRoleIds: [] as string[] }));
-  const all = [...roles, ...inactiveHeld];
-  const chosen = all.filter((r) => value.includes(r.id));
   return (
-    <CheckboxList
-      legend="Roles"
-      value={value}
-      onChange={onChange}
-      error={error ?? roleSetProblem(chosen) ?? undefined}
-      hint="One role, or a Creator role and an Approver role together. Admin and CFO roles are always on their own."
-      options={all.map((r) => {
-        const problem = value.includes(r.id) ? null : roleSetProblem([...chosen, r]);
-        return {
-          value: r.id,
-          label: (
-            <>
-              <RoleName role={r} />
-              {!r.isActive && <span className="text-muted-foreground"> (inactive)</span>}
-            </>
-          ),
-          disabled: problem !== null || !r.isActive,
-          note: problem ?? undefined,
-        };
-      })}
-    />
+    <div className="grid gap-4 sm:grid-cols-2">
+      <CheckboxList
+        legend="Teams"
+        hint="Everyone in a team can act on that team’s steps. Any number of teams."
+        value={teams}
+        onChange={(v) => onTeams(v as Team[])}
+        error={error}
+        options={TEAMS.map((t) => ({ value: t, label: TEAM_LABEL[t] }))}
+      />
+      <CheckboxList
+        legend="Can be named as"
+        hint="People named on orders, chosen per company."
+        value={capabilities}
+        onChange={(v) => onCapabilities(v as Capability[])}
+        options={CAPABILITIES.map((c) => ({
+          value: c,
+          label: CAPABILITY_LABEL[c],
+          note: CAPABILITY_HINT[c],
+        }))}
+      />
+    </div>
   );
-}
-
-function useActiveRoles() {
-  return useQuery({
-    queryKey: ['roles', 'active-options'],
-    queryFn: ({ signal }) => api.roles.list({ status: 'active', pageSize: 100 }, signal),
-  });
 }
 
 /** Shows a one-time set-password link to copy and send to the employee (D16). */
@@ -181,7 +160,6 @@ function EmployeeDialog({
   onCreated: (e: Employee) => void;
 }) {
   const queryClient = useQueryClient();
-  const roles = useActiveRoles();
   const editing = employee !== null;
   const form = useForm<FormValues>({
     resolver: zodResolver(EmployeeUpdate),
@@ -190,25 +168,23 @@ function EmployeeDialog({
           name: employee.name,
           email: employee.email,
           employeeCode: employee.employeeCode ?? '',
-          roleIds: employee.roles.map((r) => r.id),
+          teams: employee.teams,
+          capabilities: employee.capabilities,
           isActive: employee.isActive,
         }
-      : { name: '', email: '', employeeCode: '', roleIds: [], isActive: true },
+      : { name: '', email: '', employeeCode: '', teams: [], capabilities: [], isActive: true },
   });
   const save = useMutation({
     mutationFn: (v: FormValues) =>
       employee ? api.employees.update(employee.id, v) : api.employees.create(v),
     onSuccess: (saved) => {
       queryClient.invalidateQueries({ queryKey: ['employees'] });
-      queryClient.invalidateQueries({ queryKey: ['roles'] });
-      queryClient.invalidateQueries({ queryKey: ['cfo'] });
       onOpenChange(false);
       if (editing) toast.success(`Saved ${saved.name}`);
       else onCreated(saved);
     },
   });
   const errors = form.formState.errors;
-  const roleOptions = roles.data?.items ?? [];
 
   return (
     <Dialog
@@ -276,23 +252,25 @@ function EmployeeDialog({
               )}
             </Field>
           </div>
-          {roles.isPending ? (
-            <p className="text-muted-foreground text-sm">Loading roles…</p>
-          ) : (
-            <Controller
-              control={form.control}
-              name="roleIds"
-              render={({ field }) => (
-                <RolesField
-                  roles={roleOptions}
-                  held={employee?.roles ?? []}
-                  value={field.value}
-                  onChange={field.onChange}
-                  error={errors.roleIds?.message}
-                />
-              )}
-            />
-          )}
+          <Controller
+            control={form.control}
+            name="teams"
+            render={({ field: teams }) => (
+              <Controller
+                control={form.control}
+                name="capabilities"
+                render={({ field: caps }) => (
+                  <AccessFields
+                    teams={teams.value ?? []}
+                    capabilities={caps.value ?? []}
+                    onTeams={teams.onChange}
+                    onCapabilities={caps.onChange}
+                    error={errors.teams?.message}
+                  />
+                )}
+              />
+            )}
+          />
           {editing && (
             <Field label="Status">
               {({ id }) => (
@@ -326,8 +304,6 @@ function EmployeeDialog({
               onDelete={() => api.employees.remove(employee.id)}
               onDeleted={() => {
                 queryClient.invalidateQueries({ queryKey: ['employees'] });
-                queryClient.invalidateQueries({ queryKey: ['roles'] });
-                queryClient.invalidateQueries({ queryKey: ['cfo'] });
                 onOpenChange(false);
               }}
             />
@@ -394,15 +370,16 @@ export function EmployeesPage() {
       cell: (e) => <span className="text-muted-foreground">{e.employeeCode ?? '—'}</span>,
     },
     {
-      key: 'role',
-      header: 'Roles',
+      key: 'access',
+      header: 'Teams and roles',
       cell: (e) => (
-        <span className="flex flex-col">
-          {e.roles.map((r) => (
-            <span key={r.id}>
-              <RoleName role={r} />
+        <span className="flex flex-col text-[13px]">
+          <span>{e.teams.map((t) => TEAM_LABEL[t]).join(', ') || '—'}</span>
+          {e.capabilities.length > 0 && (
+            <span className="text-muted-foreground text-xs">
+              {e.capabilities.map((c) => CAPABILITY_LABEL[c]).join(', ')}
             </span>
-          ))}
+          )}
         </span>
       ),
     },
@@ -452,7 +429,7 @@ export function EmployeesPage() {
     <>
       <PageHeader
         title="Employee Master"
-        description="Everyone who can sign in, and the roles each person holds"
+        description="Everyone who can sign in: their teams, and what they can be named as"
         actions={
           <Button onClick={() => setDialog({ open: true, employee: null })}>
             <Plus aria-hidden /> Add Employee

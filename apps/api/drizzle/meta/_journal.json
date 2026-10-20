@@ -64,6 +64,20 @@
       "when": 1791802881300,
       "tag": "0008_multiple_roles",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792487204826,
+      "tag": "0009_v2_drop_v1",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792487616721,
+      "tag": "0010_v2_orders",
+      "breakpoints": true
     }
   ]
 }

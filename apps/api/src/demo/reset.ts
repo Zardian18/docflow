@@ -4,13 +4,25 @@ import type { StorageService } from '../storage/storage.js';
 
 /** Tables the reset empties completely, in the order the counts are reported. */
 const WIPED = [
-  'workflows',
-  'workflow_steps',
-  'audit_events',
-  'notification_outbox',
+  'orders',
+  'tasks',
+  'holder_intervals',
+  'approval_votes',
+  'channel_rounds',
+  'documents',
+  'payments',
+  'order_components',
+  'component_changes',
+  'shipment_checkpoints',
+  'order_events',
+  'order_products',
+  'order_slot_people',
+  'order_slot_gates',
   'uploads',
+  'buyers',
   'companies',
-  'company_default_approvers',
+  'company_slot_people',
+  'company_slot_gates',
 ] as const;
 
 export interface ResetPlan {
@@ -45,15 +57,14 @@ export async function planReset(db: DbOrTx, keepEmails: string[]): Promise<Reset
     ok: boolean;
   }>(sql`
     select e.email, e.name, e.is_active and exists (
-             select 1 from employee_roles er join roles r on r.id = er.role_id
-              where er.employee_id = e.id and r.is_system and r.permission = 'ADMIN') as ok
+             select 1 from employee_capabilities c
+              where c.employee_id = e.id and c.capability = 'ADMIN') as ok
     from employees e
     where e.email in ${list(emails)}`);
   for (const email of emails) {
     const row = kept.find((k) => k.email === email);
     if (!row) throw new Error(`No employee with the email ${email}`);
-    if (!row.ok)
-      throw new Error(`${email} must be an active employee with the built-in Admin role`);
+    if (!row.ok) throw new Error(`${email} must be an active employee with Admin access`);
   }
 
   const keep = sql`(select id from employees where email in ${list(emails)})`;
@@ -65,7 +76,6 @@ export async function planReset(db: DbOrTx, keepEmails: string[]): Promise<Reset
     db,
     sql`select count(*)::int as n from employees where id not in ${keep}`,
   );
-  rows.roles = await count(db, sql`select count(*)::int as n from roles where not is_system`);
   rows.sessions = await count(
     db,
     sql`select count(*)::int as n from sessions where employee_id not in ${keep}`,
@@ -77,19 +87,19 @@ export async function planReset(db: DbOrTx, keepEmails: string[]): Promise<Reset
   // A submitted upload's own object was already removed when it was copied to documents/
   const files = await count(
     db,
-    sql`select count(*)::int as n from (select file_key from workflows union select object_key from uploads where consumed_at is null) f`,
+    sql`select count(*)::int as n from (select file_key from documents union select object_key from uploads where consumed_at is null) f`,
   );
   return { kept: kept.map(({ email, name }) => ({ email, name })), rows, files };
 }
 
 /**
- * The pre-go-live test-data wipe (D21): deletes every document with its steps, audit trail,
- * notifications and stored files, every company, every employee except `keepEmails` (who
- * must be Admins), and every custom role. Built-in roles stay and are reactivated.
+ * The pre-go-live test-data wipe (D21, v2): deletes every order with its tasks, history and
+ * stored files, every buyer and company, and every employee except `keepEmails` (who must be
+ * Admins, and keep their teams and capabilities).
  *
  * Never part of the app: it runs only from the `reset:data` CLI, on the owner's request,
- * after a fresh backup (docs/runbook-backup.md). It is the one sanctioned way audit events
- * are removed: TRUNCATE skips the append-only row trigger (invariant 7) by design.
+ * after a fresh backup (docs/runbook-backup.md). It is the one sanctioned way order events
+ * are removed: TRUNCATE skips the append-only row trigger by design.
  */
 export async function resetData(db: Db, storage: StorageService, keepEmails: string[]) {
   const { plan, fileKeys } = await db.transaction(async (tx) => {
@@ -99,7 +109,7 @@ export async function resetData(db: Db, storage: StorageService, keepEmails: str
     );
     const plan = await planReset(tx, keepEmails);
     const { rows } = await tx.execute<{ key: string }>(
-      sql`select file_key as key from workflows union select object_key from uploads where consumed_at is null`,
+      sql`select file_key as key from documents union select object_key from uploads where consumed_at is null`,
     );
     const emails = list(plan.kept.map((k) => k.email));
     await tx.execute(sql`truncate ${sql.raw(WIPED.join(', '))}`);
@@ -110,8 +120,6 @@ export async function resetData(db: Db, storage: StorageService, keepEmails: str
       sql`delete from password_tokens where employee_id not in (select id from employees where email in ${emails})`,
     );
     await tx.execute(sql`delete from employees where email not in ${emails}`);
-    await tx.execute(sql`delete from roles where not is_system`);
-    await tx.execute(sql`update roles set is_active = true where is_system`);
     return { plan, fileKeys: rows.map((r) => r.key) };
   });
 

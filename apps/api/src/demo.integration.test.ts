@@ -1,11 +1,11 @@
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Db } from './db/client.js';
-import { DEMO_PASSWORD, demoEmail, demoPdf, seedDemo } from './demo/seed.js';
+import { DEMO_PASSWORD, demoEmail, seedDemo } from './demo/seed.js';
 import { MemoryStorage } from './storage/memory.js';
 import { Client, resetDb, setupTestDb, TEST_DB_URL, testApp } from './test-db.js';
 
-describe.skipIf(!TEST_DB_URL)('seed:demo', () => {
+describe.skipIf(!TEST_DB_URL)('seed:demo (v2)', () => {
   let db: Db;
   let end: () => Promise<void>;
   let app: Awaited<ReturnType<typeof testApp>>;
@@ -23,72 +23,52 @@ describe.skipIf(!TEST_DB_URL)('seed:demo', () => {
     await end();
   });
 
-  it('loads documents in every state through the real engine', async () => {
+  it('loads orders parked in every phase through the real engine, spread over real days', async () => {
     const result = await seedDemo(db, storage);
-    expect(result.workflows).toHaveLength(10);
-    const rows = (
-      await db.execute(
-        sql`select status, current_position as pos, count(*)::int as n from workflows group by 1, 2 order by 1, 2`,
-      )
-    ).rows;
-    // Ordered by the status enum: one part-approved parallel step stays at position 1
+    expect(result.orders).toBe(10);
+    const { rows } = await db.execute<{ status: string; n: number }>(
+      sql`select status::text, count(*)::int as n from orders group by status order by status`,
+    );
     expect(rows).toEqual([
-      { status: 'PENDING_APPROVER', pos: 1, n: 3 },
-      { status: 'PENDING_APPROVER', pos: 2, n: 2 },
-      { status: 'PENDING_CFO', pos: 3, n: 2 },
-      { status: 'COMPLETED', pos: 3, n: 1 },
-      { status: 'REJECTED', pos: 1, n: 1 },
-      { status: 'REJECTED', pos: 3, n: 1 },
+      { status: 'ACTIVE', n: 8 },
+      { status: 'DONE', n: 1 },
+      { status: 'NO_ACTION_NEEDED', n: 1 },
     ]);
-    // Every stored document is a real file under the locked prefix
-    const keys = [...storage.objects.keys()];
-    expect(keys).toHaveLength(10);
-    expect(keys.every((k) => k.startsWith('documents/'))).toBe(true);
-  });
+    // Open work exists in every phase
+    const phases = await db.execute<{ phase: number }>(
+      sql`select distinct phase from tasks where status = 'OPEN' order by phase`,
+    );
+    expect(phases.rows.map((r) => r.phase)).toEqual([1, 2, 3]);
+    // Timestamps were spread out: the oldest order started weeks ago
+    const span = await db.execute<{ days: number }>(
+      sql`select extract(day from now() - min(created_at))::int as days from orders`,
+    );
+    expect(span.rows[0]!.days).toBeGreaterThan(60);
+    // Every step's "done" moment matches its latest finishing event (the spreading kept the
+    // order); a step done twice, like a reworked PI, compares with its second completion
+    const drift = await db.execute<{ bad: number }>(sql`
+      select count(*)::int as bad from tasks t
+       cross join lateral (
+         select max(e.created_at) as at from order_events e
+          where e.task_id = t.id and e.type in ('COMPLETED', 'CONFIRMED', 'CHAIN_APPROVED', 'LOGGED', 'CLOSED')) last
+       where t.done_at is not null and last.at is not null
+         and abs(extract(epoch from last.at - t.done_at)) > 60`);
+    expect(drift.rows[0]).toEqual({ bad: 0 });
+  }, 120_000);
 
-  it('lets every demo account sign in, and the CFO sees the early rejection (D22)', async () => {
-    for (const who of ['admin', 'cfo', 'rahul', 'priya']) {
+  it('every demo account signs in; Materials has raw-material and packaging work waiting', async () => {
+    const kabir = await new Client(app).login(demoEmail('kabir'), DEMO_PASSWORD);
+    const work = (await kabir.get('/v1/work?tab=MATERIALS')).json();
+    expect(work.items.length).toBeGreaterThan(0);
+    const dev = await new Client(app).login(demoEmail('dev'), DEMO_PASSWORD);
+    const tabs = (await dev.get('/v1/work')).json().tabs.map((t: { tab: string }) => t.tab);
+    expect(tabs).toEqual(expect.arrayContaining(['REGULATION', 'PRODUCTION']));
+    for (const who of ['admin', 'rohan', 'sara', 'priya', 'vikram', 'pooja', 'imran']) {
       await new Client(app).login(demoEmail(who), DEMO_PASSWORD);
     }
-    const cfo = await new Client(app).login(demoEmail('cfo'), DEMO_PASSWORD);
-    const pending = (await cfo.get('/v1/approvals/pending')).json();
-    expect(pending.items).toHaveLength(2);
-    expect(pending.stats.rejectedBeforeFinal).toBe(1);
   });
 
-  it('gives three people both Creator and Approver roles, never in their own chain (D23)', async () => {
-    const { rows } = await db.execute<{ email: string; permissions: string }>(sql`
-      select e.email, string_agg(er.permission::text, '+' order by er.permission) as permissions
-        from employees e join employee_roles er on er.employee_id = e.id
-       group by e.email having count(*) > 1 order by e.email`);
-    expect(rows.map((r) => r.email)).toEqual(
-      ['kabir', 'meera', 'priya'].map((who) => demoEmail(who)),
-    );
-    expect(rows.every((r) => r.permissions === 'CREATOR+APPROVER')).toBe(true);
-    const own = await db.execute(sql`
-      select count(*)::int as n from workflow_steps s join workflows w on w.id = s.workflow_id
-       where s.employee_id = w.created_by`);
-    expect(own.rows[0]).toEqual({ n: 0 });
-    // Priya sees both sides: her own submission, and Q3_Vendor_Invoice waiting for her
-    const priya = await new Client(app).login(demoEmail('priya'), DEMO_PASSWORD);
-    const mine = (await priya.get('/v1/workflows/mine')).json();
-    expect(mine.items.map((i: { fileName: string }) => i.fileName)).toEqual([
-      'IT_Support_Contract.pdf',
-    ]);
-    const pending = (await priya.get('/v1/approvals/pending')).json();
-    expect(pending.items.map((i: { fileName: string }) => i.fileName)).toEqual([
-      'Q3_Vendor_Invoice.pdf',
-    ]);
-  });
-
-  it('refuses to run on a database that already has employees', async () => {
+  it('refuses to run on a database that already has data', async () => {
     await expect(seedDemo(db, storage)).rejects.toThrow(/only runs on an empty database/);
-  });
-
-  it('makes a well-formed PDF', () => {
-    const pdf = demoPdf('Q3 (Vendor) Invoice').toString();
-    expect(pdf.startsWith('%PDF-1.4')).toBe(true);
-    const xref = Number(pdf.match(/startxref\n(\d+)/)![1]);
-    expect(pdf.slice(xref, xref + 4)).toBe('xref');
   });
 });

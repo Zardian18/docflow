@@ -1,12 +1,24 @@
-import { Company, CompanyUpsert, IdParam, ListQuery, paginated } from '@docflow/shared';
-import { and, asc, count, eq, or, sql } from 'drizzle-orm';
+import {
+  Company,
+  CompanyUpsert,
+  IdParam,
+  ListQuery,
+  paginated,
+  SLOT_INFO,
+  SLOTS,
+  type Gate,
+  type Slot,
+  type SlotAssignment,
+} from '@docflow/shared';
+import { and, asc, count, eq, inArray, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
+import type { z } from 'zod';
 import type { DbOrTx } from '../db/client.js';
-import { companies, companyDefaultApprovers } from '../db/schema.js';
-import { checkChain, defaultApproversFor } from '../domain/chain.js';
-import { conflict, isUniqueViolation, notFound } from '../errors.js';
-import { currentUser, requirePermission } from '../plugins/auth.js';
+import { companies, companySlotGates, companySlotPeople, employees } from '../db/schema.js';
 import { deleteCompany } from '../domain/deletion.js';
+import { checkSlots } from '../engine/engine.js';
+import { conflict, isUniqueViolation, notFound } from '../errors.js';
+import { currentUser, requireCapability } from '../plugins/auth.js';
 import type { RouteDeps } from './deps.js';
 import { containsPattern, pageOffset, statusCondition } from './query-helpers.js';
 
@@ -17,10 +29,46 @@ const companyColumns = {
   isActive: companies.isActive,
 };
 
+/** Named people and gates for a set of companies, every slot listed (empty when not set) */
+export async function slotsFor(db: DbOrTx, companyIds: string[]) {
+  const result = new Map<string, SlotAssignment[]>();
+  if (companyIds.length === 0) return result;
+  const [people, gates] = await Promise.all([
+    db
+      .select({
+        companyId: companySlotPeople.companyId,
+        slot: companySlotPeople.slot,
+        id: employees.id,
+        name: employees.name,
+        email: employees.email,
+      })
+      .from(companySlotPeople)
+      .innerJoin(employees, eq(employees.id, companySlotPeople.employeeId))
+      .where(inArray(companySlotPeople.companyId, companyIds))
+      .orderBy(asc(companySlotPeople.ordinal)),
+    db.select().from(companySlotGates).where(inArray(companySlotGates.companyId, companyIds)),
+  ]);
+  for (const id of companyIds) {
+    result.set(
+      id,
+      SLOTS.map((slot) => ({
+        slot,
+        people: people
+          .filter((p) => p.companyId === id && p.slot === slot)
+          .map(({ id: pid, name, email }) => ({ id: pid, name, email })),
+        gate: SLOT_INFO[slot].hasGate
+          ? (gates.find((g) => g.companyId === id && g.slot === slot)?.gate ?? 'ALL')
+          : null,
+      })),
+    );
+  }
+  return result;
+}
+
 async function getCompany(db: DbOrTx, id: string) {
   const [row] = await db.select(companyColumns).from(companies).where(eq(companies.id, id));
   if (!row) throw notFound('Company');
-  return { ...row, approvers: (await defaultApproversFor(db, [id])).get(id) ?? [] };
+  return { ...row, slots: (await slotsFor(db, [id])).get(id)! };
 }
 
 async function translateUniqueErrors<T>(run: () => Promise<T>): Promise<T> {
@@ -38,8 +86,7 @@ async function translateUniqueErrors<T>(run: () => Promise<T>): Promise<T> {
 }
 
 export const companyRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db }) => {
-  // onRequest, so unauthorised callers are refused before any input validation
-  app.addHook('onRequest', requirePermission('ADMIN'));
+  app.addHook('onRequest', requireCapability('ADMIN'));
 
   app.get(
     '/',
@@ -65,12 +112,12 @@ export const companyRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db 
           .offset(pageOffset(query)),
         db.select({ total: count() }).from(companies).where(where),
       ]);
-      const approvers = await defaultApproversFor(
+      const slots = await slotsFor(
         db,
         rows.map((r) => r.id),
       );
       return {
-        items: rows.map((r) => ({ ...r, approvers: approvers.get(r.id) ?? [] })),
+        items: rows.map((r) => ({ ...r, slots: slots.get(r.id)! })),
         total: totals?.total ?? 0,
         page: query.page,
         pageSize: query.pageSize,
@@ -82,27 +129,59 @@ export const companyRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db 
     getCompany(db, params.id),
   );
 
-  app.post(
-    '/',
-    { schema: { body: CompanyUpsert, response: { 201: Company } } },
-    async (request, reply) => {
-      const body = request.body;
-      const chain = (await checkChain(db, body.approvers)).map(({ employeeId, position }) => ({
-        employeeId,
-        position,
-      }));
-      const id = await translateUniqueErrors(() =>
-        db.transaction(async (tx) => {
+  /**
+   * Saving a company's named people checks them like an order would (Q6), but allows gaps:
+   * the people can be chosen later, and an order can't be created until they are.
+   * Orders already created keep their own copy (D24).
+   */
+  async function save(id: string | null, body: z.output<typeof CompanyUpsert>) {
+    return translateUniqueErrors(() =>
+      db.transaction(async (tx) => {
+        const slots = new Map<Slot, string[]>(body.slots.map((s) => [s.slot, s.employeeIds]));
+        await checkSlots(tx, slots, false);
+        let companyId = id;
+        if (companyId) {
+          await tx
+            .update(companies)
+            .set({
+              name: body.name,
+              code: body.code,
+              isActive: body.isActive,
+              updatedAt: new Date(),
+            })
+            .where(eq(companies.id, companyId));
+        } else {
           const [created] = await tx
             .insert(companies)
             .values({ name: body.name, code: body.code, isActive: body.isActive })
             .returning({ id: companies.id });
-          await tx
-            .insert(companyDefaultApprovers)
-            .values(chain.map((a) => ({ ...a, companyId: created!.id })));
-          return created!.id;
-        }),
-      );
+          companyId = created!.id;
+        }
+        await tx.delete(companySlotPeople).where(eq(companySlotPeople.companyId, companyId));
+        await tx.delete(companySlotGates).where(eq(companySlotGates.companyId, companyId));
+        const people = body.slots.flatMap((s) =>
+          s.employeeIds.map((employeeId, ordinal) => ({
+            companyId: companyId!,
+            slot: s.slot,
+            employeeId,
+            ordinal,
+          })),
+        );
+        if (people.length > 0) await tx.insert(companySlotPeople).values(people);
+        const gates = body.slots
+          .filter((s) => SLOT_INFO[s.slot].hasGate && s.gate)
+          .map((s) => ({ companyId: companyId!, slot: s.slot, gate: s.gate as Gate }));
+        if (gates.length > 0) await tx.insert(companySlotGates).values(gates);
+        return companyId;
+      }),
+    );
+  }
+
+  app.post(
+    '/',
+    { schema: { body: CompanyUpsert, response: { 201: Company } } },
+    async (request, reply) => {
+      const id = await save(null, request.body);
       request.log.info({ companyId: id, actorId: currentUser(request).id }, 'company created');
       return reply.code(201).send(await getCompany(db, id));
     },
@@ -112,41 +191,17 @@ export const companyRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db 
     '/:id',
     { schema: { params: IdParam, body: CompanyUpsert, response: { 200: Company } } },
     async (request) => {
-      const { params, body } = request;
-      await getCompany(db, params.id);
-      const chain = (await checkChain(db, body.approvers)).map(({ employeeId, position }) => ({
-        employeeId,
-        position,
-      }));
-      await translateUniqueErrors(() =>
-        db.transaction(async (tx) => {
-          await tx
-            .update(companies)
-            .set({
-              name: body.name,
-              code: body.code,
-              isActive: body.isActive,
-              updatedAt: new Date(),
-            })
-            .where(eq(companies.id, params.id));
-          // Replacing the default chain never touches existing workflows: they hold a snapshot (invariant 2)
-          await tx
-            .delete(companyDefaultApprovers)
-            .where(eq(companyDefaultApprovers.companyId, params.id));
-          await tx
-            .insert(companyDefaultApprovers)
-            .values(chain.map((a) => ({ ...a, companyId: params.id })));
-        }),
-      );
+      await getCompany(db, request.params.id);
+      await save(request.params.id, request.body);
       request.log.info(
-        { companyId: params.id, actorId: currentUser(request).id },
+        { companyId: request.params.id, actorId: currentUser(request).id },
         'company updated',
       );
-      return getCompany(db, params.id);
+      return getCompany(db, request.params.id);
     },
   );
 
-  // Only for companies no document was ever submitted for (D21)
+  // Only for companies with no orders (D21)
   app.delete('/:id', { schema: { params: IdParam } }, async (request, reply) => {
     await deleteCompany(db, request.params.id);
     request.log.info(

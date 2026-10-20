@@ -1,52 +1,54 @@
 import { expect, test } from '@playwright/test';
 import { expectAccessible, signedIn } from './helpers';
 
-test('the Admin filters the dashboard and reassigns a pending step (D7, D9)', async ({
-  browser,
-}) => {
+test('Admin: a person in several teams, a company with ALL/ANY, a buyer', async ({ browser }) => {
   const { context, page } = await signedIn(browser, 'admin');
-  await page.goto('/admin');
-  await expect(page.getByText('Total Workflows')).toBeVisible();
-  await expectAccessible(page, 'admin dashboard');
 
-  await page.getByRole('combobox', { name: 'Status' }).click();
-  await page.getByRole('option', { name: 'Completed' }).click();
-  await expect(page).toHaveURL(/status=/);
-  await expect(page.getByRole('main')).toContainText('Annual_Audit_Fees.pdf');
-  await expect(page.getByRole('main')).not.toContainText('Q3_Vendor_Invoice.pdf');
-  await page.getByRole('button', { name: 'Clear filters' }).click();
+  await page.goto('/admin/employees');
+  await page.getByRole('button', { name: 'Add Employee' }).click();
+  let dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Full name').fill('Esha Two Teams');
+  await dialog.getByLabel('Email').fill('esha@demo.docflow.test');
+  const teams = dialog.getByRole('group', { name: 'Teams' });
+  await teams.getByLabel('Regulation').check();
+  await teams.getByLabel('Production').check();
+  await dialog
+    .getByRole('group', { name: 'Can be named as' })
+    .getByLabel(/^Approver/)
+    .check();
+  await expectAccessible(page, 'employee dialog');
+  await dialog.getByRole('button', { name: 'Add employee' }).click();
+  await expect(page.getByRole('dialog', { name: /Password link for Esha/ })).toBeVisible();
+  await page.getByRole('button', { name: 'Done' }).click();
+  const row = page.getByRole('row', { name: /Esha Two Teams/ }).filter({ visible: true });
+  await expect(row).toContainText('Regulation, Production');
 
-  // The seeded Q3 invoice waits on Priya and Arjun (parallel step 1)
-  await page.getByLabel('Search documents').fill('Q3_Vendor');
-  await page.getByText('Q3_Vendor_Invoice.pdf').first().click();
-  await page.waitForURL('**/admin/workflows/**');
-  await expect(page.getByText('Activity log')).toBeVisible();
-  await expectAccessible(page, 'admin document page');
-
-  await page.getByRole('button', { name: /^Reassign .*Priya Shah/ }).click();
-  const dialog = page.getByRole('dialog');
-  await dialog.getByRole('button', { name: 'Reassign step' }).click();
-  await expect(dialog.getByRole('alert')).toContainText('Choose who takes over');
-  await expectAccessible(page, 'reassign dialog');
-  await dialog.getByRole('combobox').click();
-  await page.getByPlaceholder('Search approvers by name').fill('Lina');
-  await page.getByRole('option', { name: /Lina Fernandes/ }).click();
-  await dialog.getByLabel(/Reason/).fill('On leave this week');
-  await dialog.getByRole('button', { name: 'Reassign step' }).click();
+  await page.goto('/admin/companies');
+  await page
+    .getByRole('link', { name: /Add company/i })
+    .first()
+    .click();
+  await page.getByLabel('Company name').fill('Trident Exports Nepal');
+  await page.getByRole('combobox', { name: /^Marketing:/ }).click();
+  await page.getByPlaceholder('Search by name').fill('Rohan');
+  await page.getByRole('option', { name: /Rohan Kapoor/ }).click();
+  await page.getByRole('combobox', { name: /PI Head Approver: who must approve/ }).click();
+  await page.getByRole('option', { name: 'Any one of them is enough' }).click();
+  await expectAccessible(page, 'company form');
+  await page.getByRole('button', { name: 'Add company' }).click();
+  await page.waitForURL('**/admin/companies');
   await expect(
-    page.getByText(/Reassigned position 1 from Priya Shah to Lina Fernandes: “On leave this week”/),
+    page.getByText('Trident Exports Nepal').filter({ visible: true }).first(),
+  ).toBeVisible();
+
+  await page.goto('/admin/buyers');
+  await page.getByRole('button', { name: 'Add Buyer' }).click();
+  dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Buyer name').fill('Lagos Pharmacy Ltd');
+  await dialog.getByLabel('Country (optional)').fill('Nigeria');
+  await dialog.getByRole('button', { name: 'Add buyer' }).click();
+  await expect(
+    page.getByRole('row', { name: /Lagos Pharmacy Ltd/ }).filter({ visible: true }),
   ).toBeVisible();
   await context.close();
-
-  // Lina now has it in her queue; Priya no longer does
-  const lina = await signedIn(browser, 'lina');
-  await lina.page.goto('/approvals');
-  await expect(
-    lina.page.getByText('Q3_Vendor_Invoice.pdf').filter({ visible: true }).first(),
-  ).toBeVisible();
-  await lina.context.close();
-  const priya = await signedIn(browser, 'priya');
-  await priya.page.goto('/approvals');
-  await expect(priya.page.getByRole('main')).not.toContainText('Q3_Vendor_Invoice.pdf');
-  await priya.context.close();
 });

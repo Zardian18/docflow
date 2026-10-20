@@ -30,7 +30,11 @@ describe.skipIf(!TEST_DB_URL)('cron tick housekeeping (Phase 7 findings 5 and 13
     await resetDb(db);
     storage.objects.clear();
     storage.deleted.length = 0;
-    await createEmployee(db, { name: 'R. Creator', email: 'creator@t.co', permission: 'CREATOR' });
+    await createEmployee(db, {
+      name: 'R. Creator',
+      email: 'creator@t.co',
+      capabilities: ['CREATOR'],
+    });
     creator = await new Client(app).login('creator@t.co');
   });
 

@@ -3,12 +3,12 @@
 //   pnpm --filter @docflow/api seed:admin --email admin@company.com --name "A. Mehta"
 import { parseArgs } from 'node:util';
 import { Email } from '@docflow/shared';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { issuePasswordLink } from './auth/password-links.js';
 import { createDb } from './db/client.js';
 import { runMigrations } from './db/migrations.js';
-import { employees, roles } from './db/schema.js';
-import { heldRoles, setRoles } from './domain/roles.js';
+import { capabilitiesOf } from './auth/sessions.js';
+import { employeeCapabilities, employees } from './db/schema.js';
 
 const { values } = parseArgs({
   options: { email: { type: 'string' }, name: { type: 'string' } },
@@ -31,22 +31,16 @@ if (!directUrl || !webOrigin) {
 await runMigrations(directUrl);
 const { pool, db } = createDb(directUrl);
 try {
-  const [adminRole] = await db
-    .select({ id: roles.id })
-    .from(roles)
-    .where(and(eq(roles.isSystem, true), eq(roles.permission, 'ADMIN')));
-  if (!adminRole) throw new Error('System Admin role missing; migrations did not run?');
-
   const [existing] = await db
-    .select({ id: employees.id, roles: heldRoles({ activeOnly: false }) })
+    .select({ id: employees.id, capabilities: capabilitiesOf })
     .from(employees)
     .where(eq(employees.email, email.data));
 
   let employeeId: string;
   if (existing) {
-    if (!existing.roles.some((r) => r.id === adminRole.id)) {
+    if (!existing.capabilities.includes('ADMIN')) {
       throw new Error(
-        `${email.data} exists but is not an Admin; change their role in the app instead`,
+        `${email.data} exists but is not an Admin; change their access in the app instead`,
       );
     }
     employeeId = existing.id;
@@ -57,7 +51,9 @@ try {
         .insert(employees)
         .values({ name, email: email.data })
         .returning({ id: employees.id });
-      await setRoles(tx, created!.id, [{ id: adminRole.id, permission: 'ADMIN' }]);
+      await tx
+        .insert(employeeCapabilities)
+        .values({ employeeId: created!.id, capability: 'ADMIN' });
       return created!.id;
     });
     console.log(`Created Admin ${name} <${email.data}>.`);

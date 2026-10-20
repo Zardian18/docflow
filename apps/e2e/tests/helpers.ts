@@ -6,15 +6,17 @@ import { expect, type Browser, type Page } from '@playwright/test';
 export const DEMO_PASSWORD = 'demo-password-1';
 export const PEOPLE = {
   admin: 'Anita Mehta',
-  cfo: 'Vikram Malhotra',
-  rahul: 'Rahul Mehra',
+  rohan: 'Rohan Kapoor',
   sara: 'Sara Khan',
   priya: 'Priya Shah',
-  arjun: 'Arjun Nair',
-  meera: 'Meera Kulkarni',
+  vikram: 'Vikram Malhotra',
   dev: 'Dev Iyer',
   lina: 'Lina Fernandes',
   kabir: 'Kabir Singh',
+  neha: 'Neha Joshi',
+  farhan: 'Farhan Ali',
+  pooja: 'Pooja Desai',
+  imran: 'Imran Shaikh',
 } as const;
 export type Person = keyof typeof PEOPLE;
 
@@ -83,4 +85,11 @@ export function watchConsole(page: Page) {
   });
   page.on('pageerror', (e) => problems.push(e.message));
   return { assertClean: () => expect(problems, 'console errors').toEqual([]) };
+}
+
+/** Opens an order from the Orders list by its number, as a person would */
+export async function openOrder(page: Page, ref: string) {
+  await page.goto(`/orders?q=${ref}`);
+  await page.getByRole('link', { name: ref }).filter({ visible: true }).first().click();
+  await page.waitForURL(/\/orders\/[0-9a-f-]{36}/);
 }

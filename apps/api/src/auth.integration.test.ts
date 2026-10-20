@@ -33,7 +33,7 @@ describe.skipIf(!TEST_DB_URL)('auth', () => {
     await createEmployee(db, {
       name: 'A. Mehta',
       email: 'admin@docflow.test',
-      permission: 'ADMIN',
+      capabilities: ['ADMIN'],
     });
   });
 
@@ -44,7 +44,7 @@ describe.skipIf(!TEST_DB_URL)('auth', () => {
         password: TEST_PASSWORD,
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toMatchObject({ email: 'admin@docflow.test', permission: 'ADMIN' });
+      expect(res.json()).toMatchObject({ email: 'admin@docflow.test', capabilities: ['ADMIN'] });
       const cookie = res.cookies.find((c) => c.name === SESSION_COOKIE);
       expect(cookie).toMatchObject({ httpOnly: true, secure: true, sameSite: 'None', path: '/' });
     });
@@ -67,13 +67,13 @@ describe.skipIf(!TEST_DB_URL)('auth', () => {
       await createEmployee(db, {
         name: 'Gone',
         email: 'gone@docflow.test',
-        permission: 'APPROVER',
+        teams: ['REGULATION'],
         active: false,
       });
       await createEmployee(db, {
         name: 'New',
         email: 'new@docflow.test',
-        permission: 'APPROVER',
+        teams: ['REGULATION'],
         password: false,
       });
       for (const email of ['gone@docflow.test', 'new@docflow.test']) {
@@ -194,7 +194,7 @@ describe.skipIf(!TEST_DB_URL)('auth', () => {
       const id = await createEmployee(db, {
         name: 'P. Kulkarni',
         email: 'pk@docflow.test',
-        permission: 'APPROVER',
+        teams: ['REGULATION'],
         password: false,
       });
       const admin = await new Client(app).login('admin@docflow.test');
@@ -220,7 +220,7 @@ describe.skipIf(!TEST_DB_URL)('auth', () => {
       const id = await createEmployee(db, {
         name: 'X',
         email: 'x@docflow.test',
-        permission: 'APPROVER',
+        teams: ['REGULATION'],
         password: false,
       });
       const admin = await new Client(app).login('admin@docflow.test');

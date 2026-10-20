@@ -8,7 +8,8 @@ import { FullPageSpinner } from '@/components/FullPageSpinner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { api, ApiError, errorMessage } from '@/lib/api';
-import { HOME_BY_PERMISSION, meQueryKey, useMe } from '@/lib/auth';
+import { meQueryKey, useMe } from '@/lib/auth';
+import { homeFor } from '@/lib/people';
 import { AuthCard } from './AuthCard';
 
 /** Only follow same-app relative paths after login (no open redirects). */
@@ -31,12 +32,12 @@ export function LoginPage() {
     mutationFn: api.auth.login,
     onSuccess: (user) => {
       queryClient.setQueryData(meQueryKey, user);
-      navigate(next ?? HOME_BY_PERMISSION[user.permission], { replace: true });
+      navigate(next ?? homeFor(user), { replace: true });
     },
   });
 
   if (me.isPending) return <FullPageSpinner />;
-  if (me.data) return <Navigate to={next ?? HOME_BY_PERMISSION[me.data.permission]} replace />;
+  if (me.data) return <Navigate to={next ?? homeFor(me.data)} replace />;
 
   const errors = form.formState.errors;
   const loginError =
