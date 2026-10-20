@@ -1,9 +1,17 @@
-import { CompanyOption, PeopleSearchQuery, PersonOption } from '@docflow/shared';
+import {
+  CompanyOption,
+  IdParam,
+  PeopleSearchQuery,
+  PersonOption,
+  SlotAssignment,
+} from '@docflow/shared';
 import { and, asc, eq, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { buyers, companies, employeeCapabilities, employees } from '../db/schema.js';
+import { notFound } from '../errors.js';
 import { requireCapability, requireUser } from '../plugins/auth.js';
+import { slotsFor } from './companies.js';
 import type { RouteDeps } from './deps.js';
 import { prefixPattern } from './query-helpers.js';
 
@@ -58,6 +66,24 @@ export const lookupRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db }
         )
         .orderBy(asc(sql`lower(${companies.name})`))
         .limit(20);
+    },
+  );
+
+  // The company's named people, to start a new order from (Marketing, Q61)
+  app.get(
+    '/v1/lookups/companies/:id/slots',
+    {
+      onRequest: requireCapability('ADMIN', 'MARKETING'),
+      schema: { params: IdParam, response: { 200: SlotAssignment.array() } },
+    },
+    async ({ params }) => {
+      const slots = (await slotsFor(db, [params.id])).get(params.id);
+      const [exists] = await db
+        .select({ id: companies.id })
+        .from(companies)
+        .where(eq(companies.id, params.id));
+      if (!exists || !slots) throw notFound('Company');
+      return slots;
     },
   );
 

@@ -211,6 +211,7 @@ export const OrderProduct = z.object({
 export const OrderDetail = OrderSummary.extend({
   notes: z.string().nullable(),
   createdByName: z.string(),
+  templateKey: z.string(),
   templateVersion: z.number().int(),
   closedAt: Instant.nullable(),
   cancelReason: z.string().nullable(),

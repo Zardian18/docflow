@@ -1,4 +1,4 @@
-import { groupBySteps, MIN_DEFAULT_APPROVERS, validateChain, type Company } from '@docflow/shared';
+import { type Company } from '@docflow/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft } from 'lucide-react';
@@ -21,8 +21,9 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
-import { api, errorMessage } from '@/lib/api';
-import { ChainBuilder, newStepKey, type ChainStep } from '@/components/chain/ChainBuilder';
+import { SlotEditor } from '@/components/SlotEditor';
+import { emptySlots, slotValueProblems, type SlotValue } from '@/lib/slots';
+import { api, ApiError, errorMessage } from '@/lib/api';
 
 const DetailsSchema = z.object({
   name: z.string().trim().min(1, 'Enter the company name').max(120),
@@ -31,45 +32,21 @@ const DetailsSchema = z.object({
 });
 type Details = z.infer<typeof DetailsSchema>;
 
-const toSteps = (company: Company): ChainStep[] =>
-  groupBySteps(company.approvers).map((group) => ({
-    key: newStepKey(),
-    people: group.map((a) => ({ employeeId: a.employeeId, name: a.name })),
-  }));
-
-const toPayload = (steps: ChainStep[]) =>
-  steps.flatMap((step, i) =>
-    step.people.map((p) => ({ employeeId: p.employeeId, position: i + 1 })),
-  );
-
-function chainError(steps: ChainStep[]): string | undefined {
-  const errors = validateChain(toPayload(steps));
-  if (errors.some((e) => e.code === 'TOO_FEW_APPROVERS')) {
-    return `Add at least ${MIN_DEFAULT_APPROVERS} approvers before the CFO.`;
-  }
-  return errors.length > 0 ? 'Each person can appear only once in the chain.' : undefined;
-}
-
 function RulesNote() {
   return (
     <aside className="bg-card rounded-xl border p-5 text-[13px] leading-relaxed">
-      <h2 className="mb-3 text-sm font-semibold">How the chain works</h2>
+      <h2 className="mb-3 text-sm font-semibold">How named people work</h2>
       <ul className="text-muted-foreground flex list-disc flex-col gap-2.5 pl-4">
+        <li>Every new order for this company copies these people and settings.</li>
         <li>
-          Steps run top to bottom. Each step starts only when the one above has fully approved.
+          Marketing can change the people for one order when creating it. The ALL/ANY settings
+          always come from here.
         </li>
+        <li>One person can’t approve twice in the same chain, and the Creator can’t approve.</li>
+        <li>Team steps (Regulation, Materials and so on) go to everyone in that team.</li>
         <li>
-          Put two or more people in one step to have them review in parallel. All of them must
-          approve.
+          Empty slots can be filled later, but orders can’t start until every slot has someone.
         </li>
-        <li>
-          A company needs at least {MIN_DEFAULT_APPROVERS} approvers. The CFO is always last and
-          fixed.
-        </li>
-        <li>
-          Creators can adjust the chain for a single document. That never changes this default.
-        </li>
-        <li>Only people with an Approver role can be added.</li>
       </ul>
     </aside>
   );
@@ -78,9 +55,11 @@ function RulesNote() {
 function CompanyForm({ company }: { company: Company | null }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const cfo = useQuery({ queryKey: ['cfo'], queryFn: ({ signal }) => api.employees.cfo(signal) });
-  const [steps, setSteps] = useState<ChainStep[]>(() => (company ? toSteps(company) : []));
-  const [submitted, setSubmitted] = useState(false);
+  const [slots, setSlots] = useState<SlotValue[]>(() =>
+    company
+      ? company.slots.map((s) => ({ slot: s.slot, people: s.people, gate: s.gate }))
+      : emptySlots(),
+  );
   const form = useForm<Details>({
     resolver: zodResolver(DetailsSchema),
     defaultValues: {
@@ -92,27 +71,33 @@ function CompanyForm({ company }: { company: Company | null }) {
 
   const save = useMutation({
     mutationFn: (details: Details) => {
-      const body = { ...details, approvers: toPayload(steps) };
+      const body = {
+        ...details,
+        slots: slots.map((s) => ({
+          slot: s.slot,
+          employeeIds: s.people.map((p) => p.id),
+          gate: s.gate,
+        })),
+      };
       return company ? api.companies.update(company.id, body) : api.companies.create(body);
     },
     onSuccess: (saved) => {
       queryClient.invalidateQueries({ queryKey: ['companies'] });
       toast.success(company ? `Saved ${saved.name}` : `Added ${saved.name}`);
-      navigate('/admin/masters/companies');
+      navigate('/admin/companies');
     },
   });
 
-  const chainProblem = submitted ? chainError(steps) : undefined;
   const errors = form.formState.errors;
-
-  const onSubmit = form.handleSubmit(
-    (details) => {
-      setSubmitted(true);
-      if (chainError(steps)) return;
-      save.mutate(details);
-    },
-    () => setSubmitted(true),
-  );
+  const serverProblems =
+    save.error instanceof ApiError && save.error.code === 'INVALID_SLOTS'
+      ? ((save.error.details as { slots?: Record<string, string> })?.slots ?? {})
+      : {};
+  const problems = { ...slotValueProblems(slots, false), ...serverProblems };
+  const onSubmit = form.handleSubmit((details) => {
+    if (Object.keys(slotValueProblems(slots, false)).length > 0) return;
+    save.mutate(details);
+  });
 
   return (
     <form
@@ -142,7 +127,7 @@ function CompanyForm({ company }: { company: Company | null }) {
             <Field
               label="Code (optional)"
               error={errors.code?.message}
-              hint="Creators can search by it."
+              hint="Marketing can search by it."
             >
               {({ id, describedBy, invalid }) => (
                 <Input
@@ -155,7 +140,7 @@ function CompanyForm({ company }: { company: Company | null }) {
                 />
               )}
             </Field>
-            <Field label="Status" hint="Inactive companies are hidden from Creators.">
+            <Field label="Status" hint="New orders can’t use inactive companies.">
               {({ id, describedBy }) => (
                 <Controller
                   control={form.control}
@@ -180,21 +165,17 @@ function CompanyForm({ company }: { company: Company | null }) {
           </div>
         </section>
 
-        <section className="bg-card rounded-xl border p-5 sm:p-6" aria-labelledby="chain-heading">
+        <section className="bg-card rounded-xl border p-5 sm:p-6" aria-labelledby="people-heading">
           <div className="mb-4">
-            <h2 id="chain-heading" className="text-sm font-semibold">
-              Default approval chain
+            <h2 id="people-heading" className="text-sm font-semibold">
+              Named people
             </h2>
             <p className="text-muted-foreground mt-1 text-[13px]">
-              Filled in automatically when a Creator picks this company.
+              Who works on this company’s orders, and for each approval, whether everyone named must
+              approve or any one is enough.
             </p>
           </div>
-          <ChainBuilder
-            steps={steps}
-            onChange={setSteps}
-            cfo={cfo.data?.cfo}
-            error={chainProblem}
-          />
+          <SlotEditor value={slots} onChange={setSlots} showGates problems={problems} />
         </section>
 
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
@@ -205,12 +186,12 @@ function CompanyForm({ company }: { company: Company | null }) {
               onDelete={() => api.companies.remove(company.id)}
               onDeleted={() => {
                 queryClient.invalidateQueries({ queryKey: ['companies'] });
-                navigate('/admin/masters/companies');
+                navigate('/admin/companies');
               }}
             />
           )}
           <Button type="button" variant="outline" asChild>
-            <Link to="/admin/masters/companies">Cancel</Link>
+            <Link to="/admin/companies">Cancel</Link>
           </Button>
           <Button type="submit" disabled={save.isPending}>
             {save.isPending ? 'Saving…' : company ? 'Save company' : 'Add company'}
@@ -237,11 +218,11 @@ export function CompanyFormPage() {
         title={title}
         description={
           <Link
-            to="/admin/masters/companies"
+            to="/admin/companies"
             className="hover:text-foreground inline-flex items-center gap-1"
           >
             <ChevronLeft className="size-3.5" aria-hidden />
-            Company Master
+            Companies
           </Link>
         }
       />

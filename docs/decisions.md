@@ -319,3 +319,18 @@ How to restore: `docs/runbook-backup.md`.
   - **Per product:** raw-material ordering, the annexure, the artwork and packaging ordering (Q21, Q23, Q25). The "all delivered" gate is order-wide (Q28). Deliver Date filled means delivered (Q27).
   - **Tracker A** starts at Accounts' advance verification (C3). **Tracker C** is the time held, rounded up to whole days (Q50), in calendar days in India time (Q51).
   - **One dashboard per person,** with a tab per team or slot, oldest first (Q8, Q53, Q54).
+
+### D25 — Choices made while building v2 (Claude Code, 20 Oct 2026; tell me if any are wrong)
+**Status: PROPOSED, built and tested.** Small points the brief and D24 left open, decided so the build could go on:
+- **Ordering tasks are done by a button.** "Order raw material" and "Order packaging and print" are completed by Materials pressing "Ordered" (with an optional comment). Delivery is tracked separately in the component tables, and the "all materials delivered" step waits for every row's Deliver Date. This refines Q21: if the ordering tasks completed by themselves on delivery, Tracker C would count waiting for suppliers as Materials' own working time.
+- **The delivered gate doesn't reopen.** Once every component has a Deliver Date, Production QA opens. Clearing a date afterwards doesn't take QA away; Production can send work back to Materials instead.
+- **Production QA's "Approve and hand over to Logistics" is the hand-over.** It isn't a separate step.
+- **Teams and shipment statuses are fixed lists in the code for now:**
+  - teams: Regulation, Materials, Design, Production, Accounts, Logistics;
+  - shipment statuses: Sailed, In transit, Delayed, At port, Customs, Out for delivery, Other.
+
+  Adding one is a small code change. Admin screens to edit them can come later if needed.
+- **Products are fixed once production starts.** The Creator lists them with the PI and can change them while the PI is being reworked.
+- **Marketing defaults to whoever creates the order** if the company names nobody. Gates always come from the company.
+- **Tracker C on dashboards** is "with you in total": all the time the current holder has had that task, rounded up to whole days.
+- **Demo data is spread over realistic days.** It is created through the real engine, then its timestamps are mapped onto a believable timeline. This is demo only; it briefly lifts the event log's append-only trigger inside its own transaction.

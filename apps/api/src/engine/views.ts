@@ -181,6 +181,7 @@ export async function orderDetail(db: Db, user: AuthUser, orderId: string): Prom
     updatedAt: o.updatedAt.toISOString(),
     notes: o.notes,
     createdByName: name(o.createdBy) ?? '—',
+    templateKey: o.templateKey,
     templateVersion: o.templateVersion,
     closedAt: iso(o.closedAt),
     cancelReason: o.cancelReason,

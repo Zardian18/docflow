@@ -2,9 +2,9 @@ import { NavLink } from 'react-router';
 import { cn } from '@/lib/utils';
 
 const TABS = [
-  { label: 'Company Master', to: '/admin/masters/companies' },
-  { label: 'Employee Master', to: '/admin/masters/employees' },
-  { label: 'Role Master', to: '/admin/masters/roles' },
+  { label: 'Employees', to: '/admin/employees' },
+  { label: 'Companies', to: '/admin/companies' },
+  { label: 'Buyers', to: '/admin/buyers' },
 ];
 
 /**

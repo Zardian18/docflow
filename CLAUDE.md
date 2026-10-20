@@ -1,6 +1,8 @@
 # DocFlow — instructions for Claude Code
 
-Document Approval Workflow Management System. A Creator uploads a document, it passes through an ordered approval chain (sequential and/or parallel steps, ending with a fixed CFO), and people are emailed when it is their turn.
+DocFlow v2 (decisions.md D24): tracks an export order from the buyer's first requirements to delivery, in three phases. Named people (Marketing, Creator, Approver, Head Approver) and team pools (Regulation, Materials, Design, Production, Accounts, Logistics) work on it through review loops, approval chains with ALL/ANY gates, per-product tasks and component tables. People work from their dashboards; v2 sends no email.
+
+**v2 sources:** `docs/v2-brief.md` (the owner's requirements, never edit), `docs/v2-gap-analysis.md` (questions, data model, plan), `docs/v2-workflow.md` (the reviewed flow) and `docs/decisions.md` D24 onward. They replace `docs/URS.md` and the v1 parts of `docs/plan.md` wherever they differ.
 
 ## Where the reference documents are
 
@@ -42,7 +44,7 @@ pnpm 12 via corepack (`corepack enable`, or `corepack pnpm …` if the shims can
 | Cron worker locally | `pnpm --filter @docflow/cron-worker dev`, then `curl http://localhost:8787/cdn-cgi/local/scheduled` |
 | Regenerate Worker types after editing a `wrangler.jsonc` | `pnpm --filter @docflow/cron-worker types` |
 | Local Postgres (needs Docker) | `docker compose up -d` |
-| Demo data into an EMPTY database (refuses production and non-empty DBs) | `pnpm --filter @docflow/api seed:demo` (accounts `<name>@demo.docflow.test`, password `demo-password-1`; Priya, Meera and Kabir are Creator + Approver) |
+| Demo data into an EMPTY database (refuses production and non-empty DBs) | `pnpm --filter @docflow/api seed:demo` (accounts `<name>@demo.docflow.test`, password `demo-password-1`; 10 orders parked in every phase, spread over realistic days) |
 | Demo data on the live site, right after a reset (no demo Admin; prints a random password once) | `pnpm --filter @docflow/api seed:demo --live` (to reuse the owner's existing demo password, set `SEED_DEMO_PASSWORD` for that one run) |
 | Test-data wipe (D21): **only on the owner's request, after a fresh backup run** | `pnpm --filter @docflow/api reset:data --keep <admin email>` (dry run), then add `--confirm` |
 | Browser + accessibility tests (starts its own API and web build; needs Postgres) | `E2E_DATABASE_URL=postgres://…/docflow_e2e pnpm --filter @docflow/e2e e2e` (first time: `pnpm --filter @docflow/e2e exec playwright install chromium`) |
@@ -57,33 +59,30 @@ Measured Render cold start: ~23–33 s for the first request after the service s
 
 Security (Phase 7, `docs/security.md`):
 - **Client IP:** `request.ip` trusts exactly `TRUSTED_PROXY_HOPS` proxies (3 on Render, measured). Never set `trustProxy: true`, which lets clients spoof IPs and bypass the rate limits.
-- **Submitted files** live at `documents/<workflowId>`. Browsers only ever get write URLs for `uploads/…`.
+- **Attached files** are copied to `documents/<orderId>/<uuid>` and checked there. Browsers only ever get write URLs for `uploads/…`.
 - **Web headers:** the security headers, CSP included, are generated into `dist/_headers` by `apps/web/vite.config.ts`. When adding a new external origin the browser calls, add it there.
 - **Dependencies:** `pnpm audit --audit-level high` runs in CI. Overrides and justified ignores live in `pnpm-workspace.yaml`.
 
 Version notes: TypeScript is pinned to 6.0.x because typescript-eslint doesn't support 7.x yet. pnpm only runs install scripts for packages listed under `allowBuilds` in `pnpm-workspace.yaml` (`pnpm approve-builds <pkg>`).
 
-## Invariants that must never be broken
-1. Approval proceeds in strict step order. A step may have **one or more** approvers (a parallel group when more than one); every approver in the step must approve before the workflow advances. A pending document is never visible to an approver whose step hasn't been reached (API-enforced, not just UI).
-2. The approver chain is **snapshotted** at submit into `workflow_steps`. Later edits to masters never change an existing workflow.
-3. A Creator's per-document changes (add, remove, reorder) never write to Company Master.
-4. The CFO is a single, global, active employee, always the final step, always a group of one, never movable or removable by a Creator.
-5. Rejection requires a non-empty reason and is final. **Any** rejection, anywhere in the chain, ends the whole workflow immediately (skips every other open step) and notifies the Creator and the CFO. Terminal states are immutable.
-6. Every decision runs in one transaction with `SELECT … FOR UPDATE` on the workflow row; it also writes the audit event and the `notification_outbox` rows in that same transaction.
-7. `audit_events` is append-only. Employees and roles are deactivated, never deleted.
-8. Emails contain links, never the document, and there is no approve-from-email action.
-9. All timestamps stored in UTC.
-10. **Notification sends are synchronous and best-effort, fired immediately after the transaction in step 6 commits, inside the same request that caused the event.** The cron tick only retries rows still `pending`/`failed`; it is a safety net for provider hiccups, not the primary delivery path, and it must never be the *only* place a send is attempted. (Reasoning: every event that needs an email happens inside a live request from a logged-in person, so the server is never asleep at the moment it matters — see `docs/plan.md` §2.4.)
-11. Only employees holding an active role with `permission = APPROVER` can be selected in a company's default approver list or a Creator's per-document "add approver" search.
-    - **Several roles per person (D23):** a person holds one role, or one Creator-type plus one Approver-type role. Admin and CFO roles are always someone's only role.
-    - **Nobody approves their own document:** a document's creator is never in its chain. The approver search never offers the person searching, submit refuses a chain containing its creator (`CREATOR_IN_CHAIN`), and so does Admin reassign. The New Submission page leaves the creator out of the company default and says so.
-    - **Checks:** read a person's permissions through `holdsPermission()` / `heldRoles()` in `apps/api/src/domain/roles.ts`, never one role.
-12. Login authenticates by `employees.email`, not an employee code.
+## Invariants that must never be broken (v2)
+1. **The workflow is data.** The steps, who holds them, loops, gates and dependencies live in `packages/shared/src/template.ts`. The engine (`apps/api/src/engine/`) implements a fixed set of step kinds and never branches on a step's name. To change the workflow, add a new template version and keep old ones while orders use them.
+2. **Orders pin their template version.** Editing a template, a company's named people or its gates never changes an order already created (the order keeps its own copy of the slots and gates).
+3. **Two actor mechanisms, kept separate.** A team step is open to every current member of that team, and any one acts. A named step belongs to the specific people on the order's slot. A person can be in any number of teams with no exclusions; Admin acts on no step.
+4. **Approval gates.** ALL needs every named person on the stage; ANY completes on the first approval. Votes are once per person per stage per run. A rejection needs a reason and goes where the template says: it reopens the earlier step, or restarts the chain.
+5. **Nobody approves twice in one chain.** One person can't fill two slots of the same approval chain, and the Creator can't fill any approval slot of their own order (`slotProblems`, checked on companies and orders).
+6. **Every action runs in one transaction that locks the order row first** (`SELECT … FOR UPDATE`). It writes the task changes, the holder intervals and the `order_events` row together. Two people acting on the same step at once: one succeeds, the other gets 409.
+7. **Everything tracked is an event:** `order_events` (actor, the team or slot they acted as, time, comment, details) is append-only, enforced by a trigger. Only `reset:data` (TRUNCATE) removes events. Component edits are also logged field by field in `component_changes`.
+8. **Document access is by kind.** `template.docAccess` decides which teams may open each kind. The full PI never reaches Regulation, Materials or Design, enforced by the API (`canSeeDoc`), never only by the UI. Named people and Admin see every document of their orders.
+9. **Visibility.** Admin sees every order. Named people see theirs. Team members see an order from the phase their team joins (`teamVisibleFrom`). An order someone can't see is a 404, never a 403.
+10. **Clocks.** Tracker B starts at "Buyer confirmed the CBM", Tracker A at Accounts verifying the advance. Both count calendar days in India time and are always shown with their date. Tracker C is the time the current holder has held a task, summed from `holder_intervals` and rounded up to whole days. All timestamps are stored in UTC.
+11. **No email in v2** (D24). People sign in and work from their dashboards. Don't add sending without a new decision.
+12. **Login** authenticates by `employees.email`, not an employee code.
 
 ## Free-tier constraints that shape the code
 - **No card on file anywhere** (Cloudflare, Google, or otherwise). This is why the API is on Render (not Google Cloud Run) and files are on Backblaze B2 (not Cloudflare R2) — both confirmed free with no payment method required.
-- Email goes over an HTTPS provider API (Brevo or Resend). **No SMTP** — Render blocks outbound ports 25/465/587.
-- **No always-on polling loop or job worker**, and no artificial "keep-alive ping" to Render either. Background work only runs from `POST /internal/tick`, triggered by the Cloudflare Worker cron every ~15–30 minutes, and its only job is retrying failed outbox rows (see invariant 10). Keeping Render artificially warm is both unsupported by Render and unnecessary given invariant 10.
+- If email is ever added back (it isn't in v2, invariant 11), it must go over an HTTPS provider API (Brevo or Resend). **No SMTP**: Render blocks outbound ports 25/465/587.
+- **No always-on polling loop or job worker**, and no artificial "keep-alive ping" to Render either. Background work only runs from `POST /internal/tick`, triggered by the Cloudflare Worker cron every ~30 minutes; in v2 it only does housekeeping (abandoned uploads, old sessions). Keeping Render artificially warm is unsupported by Render and unnecessary.
 - The API is stateless with an ephemeral filesystem. Files live in Backblaze B2 via presigned URLs (S3-compatible API, same `@aws-sdk/client-s3` client as R2 would have used — only the endpoint/credentials differ); never proxy file bytes through the API.
 - Use a standard TCP Postgres driver (`pg`) on Neon's pooled endpoint (interactive transactions are required for invariant 6; run every statement of a transaction on one `pool.connect()` client). PgBouncer transaction mode rejects session-level features (`SET`, `LISTEN`, session advisory locks), so migrations use the direct URL.
 - Render's free tier has no pre-deploy command: migrations run at container start, under a Postgres advisory lock.

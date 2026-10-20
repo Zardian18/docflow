@@ -18,6 +18,7 @@ import {
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { api, errorMessage } from '@/lib/api';
 import { useSignOutLocally } from '@/lib/auth';
+import { describeMe } from '@/lib/people';
 import { cn } from '@/lib/utils';
 import { navFor } from './nav';
 
@@ -77,7 +78,7 @@ function UserMenu({ me }: { me: Me }) {
           <UserAvatar name={me.name} />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[13px] font-semibold">{me.name}</span>
-            <span className="text-muted-foreground block truncate text-xs">{me.roleName}</span>
+            <span className="text-muted-foreground block truncate text-xs">{describeMe(me)}</span>
           </span>
           <ChevronsUpDown className="text-muted-foreground size-4 shrink-0" aria-hidden />
           <span className="sr-only">Account menu</span>
@@ -127,7 +128,7 @@ function useAccountSwitchNotice(me: Me) {
   const previous = useRef(me);
   useEffect(() => {
     if (previous.current.id !== me.id) {
-      toast.info(`You’re now signed in as ${me.name} (${me.roleName}) in this browser.`, {
+      toast.info(`You’re now signed in as ${me.name} in this browser.`, {
         description:
           'All tabs share one sign-in. Use a private window to test another account at the same time.',
         duration: 8000,

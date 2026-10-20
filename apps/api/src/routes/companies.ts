@@ -30,7 +30,7 @@ const companyColumns = {
 };
 
 /** Named people and gates for a set of companies, every slot listed (empty when not set) */
-async function slotsFor(db: DbOrTx, companyIds: string[]) {
+export async function slotsFor(db: DbOrTx, companyIds: string[]) {
   const result = new Map<string, SlotAssignment[]>();
   if (companyIds.length === 0) return result;
   const [people, gates] = await Promise.all([

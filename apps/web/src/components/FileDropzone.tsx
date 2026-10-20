@@ -12,25 +12,30 @@ export type UploadState =
   | { kind: 'done'; file: File; uploadId: string }
   | { kind: 'error'; file: File | null; message: string };
 
-/** Client-side check before anything is sent (the server and storage enforce it too, D20). */
+/** Client-side check before anything is sent (the server and storage enforce it too, Q63). */
 function problemWith(file: File): string | null {
-  if (!mimeForFileName(file.name)) return 'Only PDF and DOCX files can be uploaded.';
+  if (!mimeForFileName(file.name))
+    return 'Only PDF, Word, Excel, JPG and PNG files can be uploaded.';
   if (file.size === 0) return 'This file is empty.';
   if (file.size > MAX_UPLOAD_BYTES)
-    return `This file is ${formatFileSize(file.size)}. The limit is 10 MB.`;
+    return `This file is ${formatFileSize(file.size)}. The limit is 20 MB.`;
   return null;
 }
 
 /**
- * Screen 04's drop zone. Uploads straight to storage with a presigned URL, showing progress;
+ * A drop zone that uploads straight to storage with a presigned URL, showing progress;
  * the file can be replaced or removed, and a failed upload retried.
  */
 export function FileDropzone({
   state,
   onChange,
+  label = 'Drop a document here, or click to browse',
+  compact = false,
 }: {
   state: UploadState;
   onChange: (s: UploadState) => void;
+  label?: string;
+  compact?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -81,7 +86,7 @@ export function FileDropzone({
     <input
       ref={inputRef}
       type="file"
-      accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      accept=".pdf,.docx,.xlsx,.jpg,.jpeg,.png"
       className="sr-only"
       tabIndex={-1}
       aria-hidden
@@ -167,14 +172,17 @@ export function FileDropzone({
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
         className={cn(
-          'bg-card hover:border-primary/60 flex w-full flex-col items-center gap-1.5 rounded-xl border-2 border-dashed px-4 py-8 text-center transition-colors',
+          'bg-card hover:border-primary/60 flex w-full flex-col items-center gap-1.5 rounded-xl border-2 border-dashed px-4 text-center transition-colors',
+          compact ? 'py-4' : 'py-8',
           dragging ? 'border-primary bg-primary-soft/40' : 'border-border',
           state.kind === 'error' && 'border-destructive/50',
         )}
       >
         <UploadCloud className="text-muted-foreground mb-1 size-6" aria-hidden />
-        <span className="text-sm font-medium">Drop a document here, or click to browse</span>
-        <span className="text-muted-foreground text-xs">PDF, DOCX up to 10 MB</span>
+        <span className="text-sm font-medium">{label}</span>
+        <span className="text-muted-foreground text-xs">
+          PDF, Word, Excel, JPG or PNG up to 20 MB
+        </span>
       </button>
       {state.kind === 'error' && (
         <div
