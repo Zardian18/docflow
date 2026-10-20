@@ -458,7 +458,7 @@ async function peopleWithCapability(tx: Tx, ids: string[]) {
     .where(and(inArray(employees.id, ids), eq(employees.isActive, true)));
 }
 
-/** Checks named people: active, holding the slot's capability, and passing Q6. */
+/** Checks named people: active, holding the slot's capability, and the slot's size rules. */
 export async function checkSlots(tx: Tx, slots: Map<Slot, string[]>, requireAll: boolean) {
   const list = SLOTS.map((slot) => ({ slot, employeeIds: slots.get(slot) ?? [] }));
   const problems = slotProblems(list, { requireAll });

@@ -95,22 +95,16 @@ export const GATES = ['ALL', 'ANY'] as const;
 export const Gate = z.enum(GATES);
 export type Gate = z.infer<typeof Gate>;
 
-/**
- * Slots in the same approval chain can't share a person, and the Creator can't sit in any
- * approval slot of their own order (Q6). Marketing is a stage of every chain.
- */
-export const CHAIN_SLOTS: Slot[][] = [
-  ['MARKETING', 'PI_APPROVER', 'PI_HEAD'],
-  ['MARKETING', 'PAY_APPROVER', 'PAY_HEAD'],
-  ['MARKETING', 'BOL_APPROVER', 'BOL_HEAD'],
-];
-
 export interface SlotPeople {
   slot: Slot;
   employeeIds: string[];
 }
 
-/** Problems with a set of named slots, by slot; empty when they're fine. */
+/**
+ * Problems with a set of named slots, by slot; empty when they're fine. One person may fill
+ * several slots on the same order, the Creator included (D26): each slot acts and votes
+ * separately.
+ */
 export function slotProblems(
   slots: readonly SlotPeople[],
   { requireAll }: { requireAll: boolean },
@@ -122,24 +116,6 @@ export function slotProblems(
     if (requireAll && ids.length === 0) problems[slot] = 'Choose someone';
     if (!SLOT_INFO[slot].multiple && ids.length > 1) problems[slot] = 'Choose one person';
     if (new Set(ids).size !== ids.length) problems[slot] = 'A person is listed twice';
-  }
-  for (const chain of CHAIN_SLOTS) {
-    for (const [i, a] of chain.entries()) {
-      for (const b of chain.slice(i + 1)) {
-        if (people(a).some((id) => people(b).includes(id))) {
-          problems[b] ??=
-            `Someone is also ${SLOT_INFO[a].label}; one person can't approve twice in the same chain`;
-        }
-      }
-    }
-  }
-  const creator = people('CREATOR');
-  for (const slot of SLOTS) {
-    // Marketing reviews the Creator's work, so it counts as an approval slot here too
-    if (slot === 'CREATOR') continue;
-    if (people(slot).some((id) => creator.includes(id))) {
-      problems[slot] ??= 'The Creator can’t approve their own order';
-    }
   }
   return problems;
 }

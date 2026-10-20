@@ -16,7 +16,7 @@ export interface SlotValue {
 export const emptySlots = (): SlotValue[] =>
   SLOTS.map((slot) => ({ slot, people: [], gate: SLOT_INFO[slot].hasGate ? 'ALL' : null }));
 
-/** Problems by slot, from the same rule the server uses (Q6) */
+/** Problems by slot, from the same rule the server uses (D26) */
 export const slotValueProblems = (value: SlotValue[], requireAll: boolean) =>
   slotProblems(
     value.map((v) => ({ slot: v.slot, employeeIds: v.people.map((p) => p.id) })),

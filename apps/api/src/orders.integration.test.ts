@@ -97,7 +97,7 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
     expect(res.statusCode, res.body).toBe(204);
   };
 
-  it('Admin sets up a company with named people and ALL/ANY gates; Q6 is enforced', async () => {
+  it('Admin sets up a company with named people and ALL/ANY gates; slot rules are enforced', async () => {
     const buyer = await as.admin!.post('/v1/buyers', { name: 'Acme Imports', country: 'UAE' });
     expect(buyer.statusCode, buyer.body).toBe(201);
     ids.buyer = buyer.json().id;
@@ -111,7 +111,7 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
       { slot: 'BOL_APPROVER', employeeIds: [ids.bolAppr] },
       { slot: 'BOL_HEAD', employeeIds: [ids.head1, ids.head2], gate: 'ALL' },
     ];
-    // The Creator can't also approve, and one person can't sit twice in a chain
+    // Each named person must hold the slot's capability (several roles are fine, D26)
     const bad = await as.admin!.post('/v1/companies', {
       name: 'Bad Co',
       slots: slots.map((s) =>
@@ -119,7 +119,7 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
       ),
     });
     expect(bad.statusCode).toBe(400);
-    expect(bad.json().details.slots.PI_APPROVER).toMatch(/Creator/);
+    expect(bad.json().details.slots.PI_APPROVER).toMatch(/able to be PI Approver/);
     const company = await as.admin!.post('/v1/companies', {
       name: 'Microtech',
       code: 'mic',
@@ -523,5 +523,117 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
     // Closed orders take no more actions
     const anyTask = (await detail()).tasks[0]!;
     expect((await act('creator', anyTask.id, { action: 'SUBMIT' })).statusCode).toBe(409);
+  });
+});
+
+/** D26: one person in several roles on the same order acts separately in each role. */
+describe.skipIf(!TEST_DB_URL)('one person, several roles on one order', () => {
+  let db: Db;
+  let end: () => Promise<void>;
+  let app: Awaited<ReturnType<typeof testApp>>;
+  const storage = new MemoryStorage();
+  let solo: Client;
+  let soloId: string;
+
+  beforeAll(async () => {
+    const setup = await setupTestDb();
+    db = setup.db;
+    end = () => setup.pool.end();
+    app = await testApp(db, {}, storage);
+    await resetDb(db);
+    await createEmployee(db, { name: 'admin', email: 'admin@t.co', capabilities: ['ADMIN'] });
+    soloId = await createEmployee(db, {
+      name: 'solo',
+      email: 'solo@t.co',
+      capabilities: ['MARKETING', 'CREATOR', 'APPROVER', 'HEAD_APPROVER'],
+    });
+    solo = await new Client(app).login('solo@t.co');
+  });
+  afterAll(async () => {
+    await app.close();
+    await end();
+  });
+
+  it('Marketing, Creator, Approver and Head Approver: each stage needs its own action', async () => {
+    const admin = await new Client(app).login('admin@t.co');
+    const buyer = (await admin.post('/v1/buyers', { name: 'Acme', country: 'UAE' })).json();
+    const all = [soloId];
+    const company = await admin.post('/v1/companies', {
+      name: 'Solo Co',
+      slots: [
+        'MARKETING',
+        'CREATOR',
+        'PI_APPROVER',
+        'PI_HEAD',
+        'PAY_APPROVER',
+        'PAY_HEAD',
+        'BOL_APPROVER',
+        'BOL_HEAD',
+      ].map((slot) => ({ slot, employeeIds: all })),
+    });
+    expect(company.statusCode, company.body).toBe(201);
+    const created = await solo.post('/v1/orders', {
+      buyerId: buyer.id,
+      companyId: company.json().id,
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    const orderId = created.json().id as string;
+    const task = async (stepKey: string) =>
+      ((await solo.get(`/v1/orders/${orderId}`)).json() as OrderDetail).tasks.find(
+        (t) => t.stepKey === stepKey,
+      )!;
+    const ok = async (taskId: string, body: TaskActionRequest) => {
+      const res = await solo.post(`/v1/tasks/${taskId}/actions`, body);
+      expect(res.statusCode, res.body).toBe(204);
+    };
+    async function upload(kind: DocKind) {
+      const res = await solo.post('/v1/uploads/presign', {
+        fileName: `${kind}.pdf`,
+        contentType: PDF,
+        size: pdf.length,
+      });
+      const { uploadId } = res.json();
+      const { rows } = await db.execute<{ object_key: string }>(
+        sql`select object_key from uploads where id = ${uploadId}`,
+      );
+      storage.upload(rows[0]!.object_key, pdf, PDF);
+      return { uploadId, kind };
+    }
+
+    // As Creator, then as Marketing, on the same loop
+    let cbm = await task('cbm');
+    expect(cbm.actions).toEqual(['SUBMIT']);
+    await ok(cbm.id, { action: 'SUBMIT', uploads: [await upload('CBM')] });
+    cbm = await task('cbm');
+    expect(cbm.actions).toEqual(['CONFIRM', 'RETURN']);
+    await ok(cbm.id, { action: 'CONFIRM' });
+    await ok((await task('cbm_buyer_confirmed')).id, {
+      action: 'LOG',
+      date: new Date().toISOString().slice(0, 10),
+    });
+    await ok((await task('pi')).id, {
+      action: 'COMPLETE',
+      products: ['Prod A'],
+      uploads: [await upload('PI_FULL'), await upload('PI_NO_RATES')],
+    });
+
+    // The PI chain: one approval per stage, never one click for several
+    for (const stage of ['marketing', 'approver', 'head']) {
+      const chain = await task('pi_approval');
+      expect(chain).toMatchObject({ status: 'OPEN', side: stage });
+      expect(chain.actions).toEqual(['APPROVE', 'REJECT']);
+      await ok(chain.id, { action: 'APPROVE' });
+    }
+    expect((await task('pi_approval')).status).toBe('DONE');
+
+    const events = (await solo.get(`/v1/orders/${orderId}/timeline`)).json() as Array<{
+      type: string;
+      actingAs: string;
+    }>;
+    expect(events.filter((e) => e.type === 'APPROVED').map((e) => e.actingAs)).toEqual([
+      'MARKETING',
+      'PI_APPROVER',
+      'PI_HEAD',
+    ]);
   });
 });

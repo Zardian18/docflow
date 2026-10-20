@@ -54,7 +54,7 @@ describe('workflow templates', () => {
   });
 });
 
-describe('named slots (Q6)', () => {
+describe('named slots (D26)', () => {
   const full = (overrides: Record<string, string[]> = {}) =>
     (
       [
@@ -73,15 +73,17 @@ describe('named slots (Q6)', () => {
     expect(slotProblems(full(), { requireAll: true })).toEqual({});
   });
 
-  it('refuses one person twice in a chain, the Creator approving, and gaps', () => {
-    expect(slotProblems(full({ PI_HEAD: ['a'] }), { requireAll: true }).PI_HEAD).toMatch(
-      /twice in the same chain/,
-    );
-    expect(slotProblems(full({ PAY_APPROVER: ['c'] }), { requireAll: true }).PAY_APPROVER).toMatch(
-      /Creator/,
-    );
-    expect(slotProblems(full({ MARKETING: ['c'] }), { requireAll: true }).MARKETING).toMatch(
-      /Creator/,
+  it('lets one person fill several slots of the same chain, the Creator included', () => {
+    expect(
+      slotProblems(full({ MARKETING: ['c'], PI_APPROVER: ['c'], PI_HEAD: ['c', 'h1'] }), {
+        requireAll: true,
+      }),
+    ).toEqual({});
+  });
+
+  it('refuses gaps, two people in a one-person slot, and a person listed twice', () => {
+    expect(slotProblems(full({ PI_HEAD: ['h1', 'h1'] }), { requireAll: true }).PI_HEAD).toBe(
+      'A person is listed twice',
     );
     expect(slotProblems(full({ BOL_HEAD: [] }), { requireAll: true }).BOL_HEAD).toBe(
       'Choose someone',

@@ -314,7 +314,7 @@ How to restore: `docs/runbook-backup.md`.
   - **Superseded:** this replaces the brief's Phase 3 steps 5–9 and the answers to Q44–Q47.
 - **Everything else:** the recommendations in `docs/v2-gap-analysis.md` apply, namely the rulings on C2–C8 and the answers to Q1–Q63 (except those replaced above). The ones that shape the build most:
   - **Creator** is a named person per order (Q1). **Marketing** creates orders (Q2). Buyers come from a **Buyer Master** (Q3). There is **no CFO** (Q4).
-  - **One person can't fill two named slots** in the same approval chain, and the Creator can't approve their own order (Q6). Team pools have no exclusions at all (D23 is retired).
+  - ~~One person can't fill two named slots in the same approval chain, and the Creator can't approve their own order (Q6).~~ Replaced by D26. Team pools have no exclusions at all (D23 is retired).
   - **Two PI versions** are two uploads (Q15). A PI rejection goes back to the Creator, and the chain restarts (Q16). A payment rejection goes back to Accounts (Q45).
   - **Per product:** raw-material ordering, the annexure, the artwork and packaging ordering (Q21, Q23, Q25). The "all delivered" gate is order-wide (Q28). Deliver Date filled means delivered (Q27).
   - **Tracker A** starts at Accounts' advance verification (C3). **Tracker C** is the time held, rounded up to whole days (Q50), in calendar days in India time (Q51).
@@ -334,3 +334,10 @@ How to restore: `docs/runbook-backup.md`.
 - **Marketing defaults to whoever creates the order** if the company names nobody. Gates always come from the company.
 - **Tracker C on dashboards** is "with you in total": all the time the current holder has had that task, rounded up to whole days.
 - **Demo data is spread over realistic days.** It is created through the real engine, then its timestamps are mapped onto a believable timeline. This is demo only; it briefly lifts the event log's append-only trigger inside its own transaction.
+
+### D26 — One person can hold several roles on the same order (owner, 20 Oct 2026)
+**Status: DECIDED.** Replaces Q6 and that point of D24.
+- **Any combination:** a person can have any mix of teams and capabilities (Admin, Marketing, Creator, Approver, Head Approver), and their dashboard shows the work of all of them.
+- **Several slots on one order:** the same person may fill several named slots of one order or company, including in the same approval chain, and the Creator may also be Marketing, Approver or Head Approver.
+- **Only as different roles:** each slot is acted on separately. Someone who is both PI Approver and PI Head Approver approves once at the Approver stage and again at the Head stage, and the history shows which role each action was taken in. They still need the capability for each slot.
+- **Still refused:** a slot left empty when an order starts, two people in a one-person slot (Marketing, Creator), and the same person listed twice in one slot.

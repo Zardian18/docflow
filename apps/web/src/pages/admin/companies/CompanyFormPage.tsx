@@ -42,7 +42,10 @@ function RulesNote() {
           Marketing can change the people for one order when creating it. The ALL/ANY settings
           always come from here.
         </li>
-        <li>One person can’t approve twice in the same chain, and the Creator can’t approve.</li>
+        <li>
+          One person can fill several roles here, the Creator included. They act and approve
+          separately in each role.
+        </li>
         <li>Team steps (Regulation, Materials and so on) go to everyone in that team.</li>
         <li>
           Empty slots can be filled later, but orders can’t start until every slot has someone.
