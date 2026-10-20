@@ -293,3 +293,29 @@ How to restore: `docs/runbook-backup.md`.
   - **Cast:** 1 CFO, Rahul and Sara (Creator), Arjun, Dev and Lina (Approver), and Priya, Meera and Kabir (both).
   - **New documents:** three, submitted by the dual-role people, including Priya's Microtech document, where she is left out of her own chain.
   - **Live site:** loaded only when the owner asks, reusing the current demo password.
+
+---
+
+## DocFlow v2
+
+### D24 — v2 scope and answers (owner, 20 Oct 2026)
+**Status: ANSWERED.** Requirements: `docs/v2-brief.md`. Analysis and plan: `docs/v2-gap-analysis.md`. Reviewed flow: `docs/v2-workflow.md`. v2 replaces the v1 approval engine, data model and dashboards; the platform (sign-in, storage, backups, hosting, security) stays.
+- **Data safety:** option 1. A final v1 backup plus a downloaded archive, then rebuild on the v2 schema at cut-over. The owner accepts losing the live v1 demo data. Build on a long-lived `v2` branch; the live site stays on v1 until a single cut-over, which ends with a new v2 demo data set.
+- **No email at all in v2.** People sign in daily and work from their dashboards. This replaces the brief's notification rules: C1, Q57–Q59 and Phase V9 are dropped.
+- **No workflow designer.** The owner wants to see the whole chain live, with timestamps, plus the per-product tables with day counts. The workflow is versioned configuration changed through code review (Q62).
+- **Component table:**
+  - **PO** is the buyer's purchase order: **PO Quantity** is what the buyer ordered, and **PO Date** is when they placed the order.
+  - **Order Quantity** is what was actually manufactured, often about 2% more or less than the PO.
+  - **TNS** is the manufacturer and **Trident** the exporter. Materials edits both remark columns from their dashboard.
+- **Volumes (Q64):** not needed for the design. Free-tier storage is watched instead.
+- **Phase 3 changed from the brief:**
+  - **Order of steps:** after the payment check is approved, Logistics logs that the shipment sailed and posts updates (route, delays and so on) until delivery. When the buyer asks Logistics for the Bill of Lading, Logistics logs the request, creates and uploads the BoL, and it goes through approval (Accounts → Marketing → Approver → Head Approver(s), with its own people and ALL/ANY settings). Logistics then sends it to the buyer, and the order becomes **No Action Needed**. Logistics confirms delivery, and the order becomes **Done**, only after the BoL is sent.
+  - **BoL rejection:** goes back to Logistics, to correct and re-upload the BoL.
+  - **Superseded:** this replaces the brief's Phase 3 steps 5–9 and the answers to Q44–Q47.
+- **Everything else:** the recommendations in `docs/v2-gap-analysis.md` apply, namely the rulings on C2–C8 and the answers to Q1–Q63 (except those replaced above). The ones that shape the build most:
+  - **Creator** is a named person per order (Q1). **Marketing** creates orders (Q2). Buyers come from a **Buyer Master** (Q3). There is **no CFO** (Q4).
+  - **One person can't fill two named slots** in the same approval chain, and the Creator can't approve their own order (Q6). Team pools have no exclusions at all (D23 is retired).
+  - **Two PI versions** are two uploads (Q15). A PI rejection goes back to the Creator, and the chain restarts (Q16). A payment rejection goes back to Accounts (Q45).
+  - **Per product:** raw-material ordering, the annexure, the artwork and packaging ordering (Q21, Q23, Q25). The "all delivered" gate is order-wide (Q28). Deliver Date filled means delivered (Q27).
+  - **Tracker A** starts at Accounts' advance verification (C3). **Tracker C** is the time held, rounded up to whole days (Q50), in calendar days in India time (Q51).
+  - **One dashboard per person,** with a tab per team or slot, oldest first (Q8, Q53, Q54).

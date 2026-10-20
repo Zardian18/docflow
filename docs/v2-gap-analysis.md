@@ -283,11 +283,14 @@ flowchart TB
     CS --> IP[Invoice packaging loop<br/>REVIEW_LOOP Logistics↔Marketing]
     IP --> RP[Remaining payment requested<br/>STATUS_LOG Marketing]
     RP --> PV[Payment verification<br/>APPROVAL_CHAIN Accounts→Marketing→Approver→Head]
-    PV --> BL[BoL uploaded<br/>TASK Logistics]
-    BL --> BR[BoL release<br/>APPROVAL_CHAIN Accounts→Marketing→Approver→Head]
-    BR --> SENT[BoL sent · No Action Needed<br/>STATUS_LOG]
-    SENT --> SH[Shipment checkpoints<br/>CHECKPOINT_LOG Logistics]
-    SH --> DONE[Delivered · Done<br/>CLOSE Logistics]
+    PV --> SAIL[Shipment sailed<br/>STATUS_LOG Logistics]
+    SAIL --> SH[Shipment updates<br/>CHECKPOINT_LOG Logistics · until delivered]
+    SAIL --> ASK[Buyer asked for BoL<br/>STATUS_LOG Logistics]
+    ASK --> BL[BoL created<br/>TASK Logistics]
+    BL --> BA[BoL approval<br/>APPROVAL_CHAIN Accounts→Marketing→Approver→Head · reject → Logistics]
+    BA --> SENT[BoL sent by Logistics · No Action Needed<br/>STATUS_LOG]
+    SENT --> DONE[Delivered · Done<br/>CLOSE Logistics]
+    SH --> DONE
   end
 ```
 

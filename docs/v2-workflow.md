@@ -1,6 +1,6 @@
 # DocFlow v2 — order workflow (for review before building)
 
-How an export order moves through DocFlow v2, from the buyer's first requirements to the shipment being delivered. This is the proposed flow from `docs/v2-gap-analysis.md`, with the owner's answers of 20 Oct 2026 applied.
+How an export order moves through DocFlow v2, from the buyer's first requirements to the shipment being delivered. This is the proposed flow from `docs/v2-gap-analysis.md`, with the owner's answers of 20 Oct 2026 applied, including the Phase 3 change: shipment tracking starts at sailing, and the BoL is created only when the buyer asks.
 
 **Key:**
 
@@ -82,7 +82,7 @@ flowchart TB
 
 ## Phase 3 · Logistics and shipment
 
-The order shows **No Action Needed** once the Bill of Lading reaches the buyer, and **Done** once Logistics confirms the goods were delivered.
+After the remaining payment is approved, the shipment sails and Logistics tracks it. The Bill of Lading is created only when the buyer asks Logistics for it. The order shows **No Action Needed** once Logistics has sent the approved BoL to the buyer, and **Done** once Logistics confirms the buyer received the goods.
 
 ```mermaid
 flowchart TB
@@ -93,22 +93,30 @@ flowchart TB
   P2 -.->|reject| P1
   P3 -.->|reject| P1
   P4 -.->|reject| P1
-  P4 --> BL["Logistics uploads the Bill of Lading"]
-  BL --> R1["Accounts"] --> R2["Marketing"] --> R3["Approver"] --> R4["Head Approver(s) · ALL or ANY<br/>release the BoL to the buyer?"]
-  R4 --> SENT["BoL sent to buyer<br/>status: No Action Needed"]
-  SENT --> CP["Logistics posts shipment updates<br/>sailed · at port · customs · … as many as needed"]
-  CP --> DONE(["Logistics confirms delivery<br/>status: Done"])
+  P4 --> SAIL["Logistics logs: shipment sailed"]
+  SAIL --> CP["Logistics posts shipment updates<br/>route · delays · at port · customs …<br/>as many as needed, until delivered"]
+  SAIL --> ASK["Buyer asks Logistics for the BoL<br/>(Logistics logs the request)"]
+  ASK --> BL["Logistics creates and uploads the BoL"]
+  BL --> R1["Accounts"] --> R2["Marketing"] --> R3["Approver"] --> R4["Head Approver(s) · ALL or ANY"]
+  R2 -.->|reject| BL
+  R3 -.->|reject| BL
+  R4 -.->|reject| BL
+  R1 -.->|reject| BL
+  R4 --> SENT["Logistics sends the BoL to the buyer<br/>status: No Action Needed"]
+  SENT --> DONE(["Logistics confirms the buyer received the goods<br/>status: Done"])
+  CP --> DONE
 ```
 
 1. **[Team] Logistics ⇄ [Named] Marketing [Loop: container sizing]:** container and sizing details, until Marketing confirms.
 2. **[Team] Logistics ⇄ [Named] Marketing [Loop: invoice packaging]:** Logistics prepares and uploads the real invoice, as a separate loop, until Marketing confirms.
 3. **[Named] Marketing** logs that the remaining payment was requested. This only records the request: Marketing can't confirm that the buyer paid.
 4. **Payment check: [Team] Accounts → [Named] Marketing → Approver → Head Approver(s).** Accounts confirms the money arrived, then the three sign off in turn. A rejection goes back to Accounts with the reason, and Marketing chases the buyer.
-5. **[Team] Logistics** uploads the Bill of Lading.
-6. **Release decision: [Team] Accounts → [Named] Marketing → Approver → Head Approver(s).** The same four stages decide whether to send the BoL to the buyer. This chain has its own people and ALL/ANY settings. A rejection puts the order on hold, with the reason, until Marketing resolves it.
-7. **[Named] Marketing** marks the BoL as sent. The status becomes **No Action Needed**.
-8. **[Team] Logistics** posts shipment updates: a status from a list (sailed, at port, customs, out for delivery, other) plus free text and a date, as many as needed.
-9. **[Team] Logistics** confirms the buyer received the goods. The status becomes **Done**. Only Logistics can close the order.
+5. **[Team] Logistics** logs that the **shipment sailed**, with the date. Tracking starts here.
+6. **[Team] Logistics** posts shipment updates for as long as the goods are in transit: route, delays, at port, customs, and so on. Each has a status from a list, free text and a date, and there can be any number of them. Updates can be posted at any time until delivery, including while the BoL is being prepared.
+7. **[Team] Logistics** logs that the **buyer asked for the BoL**, then creates and uploads it. Nothing happens to the BoL before the buyer asks.
+8. **BoL approval: [Team] Accounts → [Named] Marketing → Approver → Head Approver(s).** This chain has its own people and ALL/ANY settings. A rejection goes back to Logistics with the reason, to correct and re-upload the BoL.
+9. **[Team] Logistics** sends the approved BoL to the buyer and marks it sent. The status becomes **No Action Needed**.
+10. **[Team] Logistics** confirms the buyer received the goods. The status becomes **Done**. Only Logistics can close the order, and only after the BoL has been sent.
 
 ---
 
@@ -150,5 +158,5 @@ In the owner's Tracker C example (Materials day 1, Regulation 3 days, Materials 
 1. **Order of Phase 1:** is it right that the CBM is confirmed before the PI is drafted, and that the advance comes after PI approval?
 2. **Per product:** annexure, artwork, raw-material ordering and packaging ordering each happen once per product, not once per order.
 3. **Production waits for everything:** it starts only when every component of every product is delivered, not product by product.
-4. **Phase 3 order:** container sizing, then the invoice, then the payment request, payment check, BoL, release check, BoL sent, shipment updates, delivered.
-5. **Rejections:** a PI rejection goes back to the Creator, a payment rejection goes back to Accounts, and a release rejection puts the order on hold.
+4. **Phase 3 order:** container sizing, then the invoice, then the payment request and payment check, then the shipment sails and is tracked. When the buyer asks, Logistics creates the BoL, it's approved and sent, and then delivery.
+5. **Rejections:** a PI rejection goes back to the Creator, a payment rejection goes back to Accounts, and a BoL rejection goes back to Logistics to correct it.
