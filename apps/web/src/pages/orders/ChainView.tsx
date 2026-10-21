@@ -178,7 +178,8 @@ function TaskLine({
           )}
           {task?.tag && <StatusPill tone="grey">{TAG_LABEL[task.tag]}</StatusPill>}
           {task?.status === 'OPEN' && task.holder && (
-            <StatusPill tone="amber">
+            // Several named people make a long label: let it wrap on narrow screens
+            <StatusPill tone="amber" className="max-w-full whitespace-normal">
               With {task.holder.label}
               {task.holder.people.length > 0 && `: ${task.holder.people.join(', ')}`}
             </StatusPill>

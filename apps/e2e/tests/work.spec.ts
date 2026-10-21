@@ -29,7 +29,8 @@ test('My Work: tabs per team, oldest first, the Materials task-type filter', asy
   // A row opens the order at that step
   await page
     .getByRole('main')
-    .getByRole('link', { name: /^ORD-\d{4}/ })
+    // Order numbers are ORD-0001 or the PI number the Creator gave (D27)
+    .getByRole('link', { name: /^(ORD-\d{4}|\w+\/PI\/)/ })
     .filter({ visible: true })
     .first()
     .click();
@@ -46,6 +47,14 @@ test('named people see their approvals under "Named on orders"', async ({ browse
     page
       .getByRole('main')
       .getByText(/PI approval · Head Approver/)
+      .filter({ visible: true })
+      .first(),
+  ).toBeVisible();
+  // The PI being approved opens straight from the dashboard (D27)
+  await expect(
+    page
+      .getByRole('main')
+      .getByRole('button', { name: 'View PI (full)' })
       .filter({ visible: true })
       .first(),
   ).toBeVisible();
