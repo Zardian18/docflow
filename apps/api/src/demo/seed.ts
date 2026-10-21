@@ -7,9 +7,8 @@ import { hashPassword } from '../auth/crypto.js';
 import type { Db } from '../db/client.js';
 import {
   buyers,
-  companies,
-  companySlotGates,
-  companySlotPeople,
+  buyerSlotGates,
+  buyerSlotPeople,
   employeeCapabilities,
   employees,
   orders,
@@ -58,64 +57,85 @@ export const PEOPLE: Person[] = [
   { key: 'tara', name: 'Tara Menon', teams: ['LOGISTICS', 'ACCOUNTS'] },
 ];
 
-const COMPANIES: Array<{
+type Chain = Array<[Slot, string[], ('ALL' | 'ANY')?]>;
+
+const TPE_CHAIN: Chain = [
+  ['MARKETING', ['rohan']],
+  ['CREATOR', ['sara']],
+  ['PI_APPROVER', ['priya']],
+  ['PI_HEAD', ['vikram'], 'ALL'],
+  ['PAY_APPROVER', ['arjun']],
+  ['PAY_HEAD', ['vikram', 'meera'], 'ANY'],
+  ['BOL_APPROVER', ['priya']],
+  ['BOL_HEAD', ['vikram', 'meera'], 'ALL'],
+];
+const THC_CHAIN: Chain = [
+  ['MARKETING', ['nisha']],
+  ['CREATOR', ['rahul']],
+  ['PI_APPROVER', ['arjun']],
+  ['PI_HEAD', ['meera'], 'ALL'],
+  ['PAY_APPROVER', ['priya']],
+  ['PAY_HEAD', ['meera'], 'ALL'],
+  ['BOL_APPROVER', ['arjun']],
+  ['BOL_HEAD', ['vikram', 'meera'], 'ANY'],
+];
+
+/** The buyer is the company the order is for, with its own default chain (D27) */
+const BUYERS: Array<{
   key: string;
   name: string;
   code: string;
-  slots: Array<[Slot, string[], ('ALL' | 'ANY')?]>;
+  country: string;
+  address: string;
+  /** Prefix of the PI numbers the Creator gives this buyer's orders */
+  pi: string;
+  chain: Chain;
 }> = [
-  {
-    key: 'tpe',
-    name: 'Trident Pharma Exports',
-    code: 'TPE',
-    slots: [
-      ['MARKETING', ['rohan']],
-      ['CREATOR', ['sara']],
-      ['PI_APPROVER', ['priya']],
-      ['PI_HEAD', ['vikram'], 'ALL'],
-      ['PAY_APPROVER', ['arjun']],
-      ['PAY_HEAD', ['vikram', 'meera'], 'ANY'],
-      ['BOL_APPROVER', ['priya']],
-      ['BOL_HEAD', ['vikram', 'meera'], 'ALL'],
-    ],
-  },
-  {
-    key: 'thc',
-    name: 'Trident Healthcare',
-    code: 'THC',
-    slots: [
-      ['MARKETING', ['nisha']],
-      ['CREATOR', ['rahul']],
-      ['PI_APPROVER', ['arjun']],
-      ['PI_HEAD', ['meera'], 'ALL'],
-      ['PAY_APPROVER', ['priya']],
-      ['PAY_HEAD', ['meera'], 'ALL'],
-      ['BOL_APPROVER', ['arjun']],
-      ['BOL_HEAD', ['vikram', 'meera'], 'ANY'],
-    ],
-  },
-];
-
-const BUYERS = [
   {
     key: 'alnoor',
     name: 'Al Noor Medical',
+    code: 'ANM',
     country: 'United Arab Emirates',
     address: 'Al Quoz Industrial 3, Dubai',
+    pi: 'TPE/PI/26-27',
+    chain: TPE_CHAIN,
   },
   {
     key: 'kenya',
     name: 'Kenya Health Supplies',
+    code: 'KHS',
     country: 'Kenya',
     address: 'Mombasa Road, Nairobi',
+    pi: 'TPE/PI/26-27',
+    chain: TPE_CHAIN,
+  },
+  {
+    key: 'andes',
+    name: 'Andes Pharma',
+    code: 'AND',
+    country: 'Peru',
+    address: 'Av. Javier Prado 1450, Lima',
+    pi: 'TPE/PI/26-27',
+    chain: TPE_CHAIN,
   },
   {
     key: 'medline',
     name: 'MedLine Philippines',
+    code: 'MLP',
     country: 'Philippines',
     address: 'Ortigas Center, Pasig City',
+    pi: 'THC/PI/26-27',
+    chain: THC_CHAIN,
   },
-  { key: 'andes', name: 'Andes Pharma', country: 'Peru', address: 'Av. Javier Prado 1450, Lima' },
+  {
+    key: 'gulf',
+    name: 'Gulf Care Trading',
+    code: 'GCT',
+    country: 'Oman',
+    address: 'Ruwi High Street, Muscat',
+    pi: 'THC/PI/26-27',
+    chain: THC_CHAIN,
+  },
 ];
 
 /** A small, valid one-page PDF showing `title`, so "View" opens something real. */
@@ -165,8 +185,8 @@ export async function seedDemo(
         : sql`not exists (select 1 from ${employeeCapabilities} c where c.employee_id = ${employees.id} and c.capability = 'ADMIN')`,
     );
   const [{ n: orderCount } = { n: 0 }] = await db.select({ n: count() }).from(orders);
-  const [{ n: companyCount } = { n: 0 }] = await db.select({ n: count() }).from(companies);
-  if (others + orderCount + companyCount > 0) {
+  const [{ n: buyerCount } = { n: 0 }] = await db.select({ n: count() }).from(buyers);
+  if (others + orderCount + buyerCount > 0) {
     throw new Error(
       withAdmin
         ? 'seed:demo only runs on an empty database (it found existing data)'
@@ -200,33 +220,23 @@ export async function seedDemo(
     };
   }
 
-  const companyIds: Record<string, string> = {};
-  for (const c of COMPANIES) {
-    const [row] = await db
-      .insert(companies)
-      .values({ name: c.name, code: c.code })
-      .returning({ id: companies.id });
-    companyIds[c.key] = row!.id;
-    for (const [slot, keys, gate] of c.slots) {
-      await db.insert(companySlotPeople).values(
-        keys.map((k, ordinal) => ({
-          companyId: row!.id,
-          slot,
-          employeeId: users[k]!.id,
-          ordinal,
-        })),
-      );
-      if (gate) await db.insert(companySlotGates).values({ companyId: row!.id, slot, gate });
-    }
-  }
   const buyerIds: Record<string, string> = {};
   for (const b of BUYERS) {
     const [row] = await db
       .insert(buyers)
-      .values({ name: b.name, country: b.country, address: b.address })
+      .values({ name: b.name, code: b.code, country: b.country, address: b.address })
       .returning({ id: buyers.id });
     buyerIds[b.key] = row!.id;
+    for (const [slot, keys, gate] of b.chain) {
+      await db
+        .insert(buyerSlotPeople)
+        .values(
+          keys.map((k, ordinal) => ({ buyerId: row!.id, slot, employeeId: users[k]!.id, ordinal })),
+        );
+      if (gate) await db.insert(buyerSlotGates).values({ buyerId: row!.id, slot, gate });
+    }
   }
+  let piNumber = 40;
 
   // ---- Helpers that drive the engine as a person would ----------------------------------
 
@@ -248,13 +258,7 @@ export async function seedDemo(
   }
 
   /** One order, recording a virtual day for each step so the timeline can be spread out */
-  async function order(
-    key: string,
-    companyKey: string,
-    buyerKey: string,
-    notes: string,
-    startDaysAgo: number,
-  ) {
+  async function order(key: string, buyerKey: string, notes: string, startDaysAgo: number) {
     const marks: Array<{ real: Date; day: number }> = [];
     let day = 0;
     // The database and app clocks can differ by a few milliseconds, so each moment is
@@ -268,13 +272,12 @@ export async function seedDemo(
     };
     marks.push({ real: new Date(Date.now() - 1000), day: 0 });
     await pause();
-    const marketing = COMPANIES.find((c) => c.key === companyKey)!.slots.find(
-      (s) => s[0] === 'MARKETING',
-    )![1][0]!;
+    const buyer = BUYERS.find((b) => b.key === buyerKey)!;
+    const marketing = buyer.chain.find((s) => s[0] === 'MARKETING')![1][0]!;
     const id = await createOrder(
       db,
       users[marketing]!,
-      OrderCreate.parse({ buyerId: buyerIds[buyerKey], companyId: companyIds[companyKey], notes }),
+      OrderCreate.parse({ buyerId: buyerIds[buyerKey], notes }),
     );
     const taskOf = async (stepKey: string, product?: string) => {
       const rows = await db.execute<{ id: string; name: string | null }>(sql`
@@ -302,6 +305,7 @@ export async function seedDemo(
       startDaysAgo,
       key,
       mark,
+      piRef: () => `${buyer.pi}/${String(++piNumber).padStart(4, '0')}`,
       products: async () => {
         const rows = await db.execute<{ id: string; name: string }>(
           sql`select id, name from order_products where order_id = ${id} order by position`,
@@ -312,7 +316,7 @@ export async function seedDemo(
   }
   type O = Awaited<ReturnType<typeof order>>;
 
-  const payment = (amount: string, currency = 'USD') => ({
+  const payment = (amount: string, currency = 'INR') => ({
     receivedOn: daysAgo(0),
     amount,
     currency,
@@ -343,9 +347,11 @@ export async function seedDemo(
       action: 'LOG',
       comment: 'Confirmed on call',
     });
+    // The Creator renames the order to the PI's number (D27)
     await o.step(1, who.creator, 'pi', {
       action: 'COMPLETE',
       products,
+      orderRef: o.piRef(),
       uploads: [
         await file(who.creator, 'PI_FULL', 'PI_full.pdf'),
         await file(who.creator, 'PI_NO_RATES', 'PI_quantities_only.pdf'),
@@ -370,60 +376,68 @@ export async function seedDemo(
     for (const h of who.heads) await o.step(0.5, h, 'pi_approval', { action: 'APPROVE' });
     await o.step(0.5, who.mkt, 'advance_requested', { action: 'LOG' });
     if (opts.stop === 'advance') return;
-    await o.step(2, 'pooja', 'advance_verified', { action: 'COMPLETE', payment: payment('30000') });
+    await o.step(2, 'pooja', 'advance_verified', {
+      action: 'COMPLETE',
+      payment: payment('2500000'),
+    });
   }
 
-  async function components(
-    o: O,
-    rows: Record<string, Array<[string, 'RAW_MATERIAL' | 'PACKAGING', string, string]>>,
-    deliver: (name: string) => boolean,
-  ) {
-    for (const p of await o.products()) {
-      for (const [name, kind, po, made] of rows[p.name] ?? []) {
-        await o.mark(0.2);
-        const id = await addComponent(
-          db,
-          users.kabir!,
-          o.id,
-          p.id,
-          ComponentInput.parse({
-            name,
-            kind,
-            poQuantity: po,
-            orderQuantity: made,
-            poDate: daysAgo(o.startDaysAgo - 8),
-          }),
-        );
-        if (deliver(name)) {
-          await o.mark(1.5);
-          await updateComponent(
-            db,
-            users.kabir!,
-            id,
-            ComponentInput.parse({
-              name,
-              kind,
-              poQuantity: po,
-              orderQuantity: made,
-              poDate: daysAgo(o.startDaysAgo - 8),
-              dispatchDate: daysAgo(Math.max(0, o.startDaysAgo - 13)),
-              deliverDate: daysAgo(Math.max(0, o.startDaysAgo - 15)),
-              lrDetails: `LR-${Math.floor(10000 + Math.random() * 89999)}`,
-              challanNo: `CH-${Math.floor(1000 + Math.random() * 8999)}`,
-              tnsRemark: made !== po ? 'Run within ±2%' : null,
-            }),
-          );
+  type Row = [string, 'RAW_MATERIAL' | 'PACKAGING', string, string];
+  type Rows = Record<string, Row[]>;
+
+  /**
+   * Materials' component tables, the way the team works (D27): every component listed as soon
+   * as production starts, the PO Date when it is ordered, then dispatch and delivery with the
+   * Challan No. and LR Details. Each date gets its own day on the timeline.
+   */
+  function tables(o: O, rows: Rows) {
+    const parts = new Map<string, { id: string; input: Record<string, string | null> }>();
+    const of = (p: { name: string }, kind: Row[1]) =>
+      (rows[p.name] ?? []).filter((r) => r[1] === kind);
+    const save = async (key: string, patch: Record<string, string | null>) => {
+      const part = parts.get(key)!;
+      part.input = { ...part.input, ...patch };
+      await updateComponent(db, users.kabir!, part.id, ComponentInput.parse(part.input));
+    };
+    return {
+      async list(p: { id: string; name: string }) {
+        for (const [name, kind, po] of rows[p.name] ?? []) {
+          await o.mark(0.1);
+          const input = { name, kind, poQuantity: po };
+          const id = await addComponent(db, users.kabir!, o.id, p.id, ComponentInput.parse(input));
+          parts.set(`${p.name}|${name}`, { id, input });
         }
-      }
-    }
+      },
+      async ordered(p: { name: string }, kind: Row[1]) {
+        for (const [name] of of(p, kind)) {
+          await o.mark(0.2);
+          await save(`${p.name}|${name}`, { poDate: daysAgo(0) });
+        }
+      },
+      /** Dispatched, then delivered; `deliver: false` stops a component at Dispatched */
+      async arrived(p: { name: string }, deliver: (name: string) => boolean) {
+        for (const [name, , po, made] of rows[p.name] ?? []) {
+          await o.mark(0.6);
+          await save(`${p.name}|${name}`, {
+            dispatchDate: daysAgo(0),
+            lrDetails: `LR-${Math.floor(10000 + Math.random() * 89999)}`,
+            challanNo: `CH-${Math.floor(1000 + Math.random() * 8999)}`,
+          });
+          if (!deliver(name)) continue;
+          await o.mark(1.2);
+          await save(`${p.name}|${name}`, {
+            deliverDate: daysAgo(0),
+            orderQuantity: made,
+            tnsRemark: made !== po ? 'Run within ±2%' : null,
+          });
+        }
+      },
+    };
   }
 
-  async function phase2(
-    o: O,
-    rows: Parameters<typeof components>[1],
-    stopAt: 'loops' | 'delivery' | 'qa' | 'end',
-  ) {
+  async function phase2(o: O, rows: Rows, stopAt: 'loops' | 'delivery' | 'qa' | 'end') {
     const products = await o.products();
+    const t = tables(o, rows);
     for (const p of products) {
       await o.step(
         0.5,
@@ -440,6 +454,8 @@ export async function seedDemo(
         p.name,
       );
     }
+    // Every component listed up front, even before anything is ordered (D27)
+    for (const p of products) await t.list(p);
     const [first, ...rest] = products;
     await o.step(
       2,
@@ -459,8 +475,9 @@ export async function seedDemo(
       },
       first!.name,
     );
+    await t.ordered(first!, 'RAW_MATERIAL');
     await o.step(
-      0.5,
+      0.2,
       'neha',
       'raw_material',
       { action: 'COMPLETE', comment: 'PO raised with API supplier' },
@@ -472,26 +489,29 @@ export async function seedDemo(
     for (const p of rest) {
       await o.step(0.5, 'dev', 'annexure', { action: 'CONFIRM' }, p.name);
       await o.step(0.5, 'lina', 'artwork', { action: 'CONFIRM' }, p.name);
-      await o.step(0.5, 'kabir', 'raw_material', { action: 'COMPLETE' }, p.name);
+      // Ordered a few days late, so the ordering delay shows
+      await o.mark(2);
+      await t.ordered(p, 'RAW_MATERIAL');
+      await o.step(0.2, 'kabir', 'raw_material', { action: 'COMPLETE' }, p.name);
     }
-    for (const p of products)
+    for (const p of products) {
+      await o.mark(1);
+      await t.ordered(p, 'PACKAGING');
       await o.step(
-        1,
+        0.2,
         'kabir',
         'packaging',
         { action: 'COMPLETE', comment: 'Printing started' },
         p.name,
       );
-    const allDelivered = stopAt !== 'delivery';
-    let skipped = false;
-    await components(o, rows, () => {
-      if (allDelivered) return true;
-      if (!skipped) {
-        skipped = true;
-        return false;
-      }
-      return true;
-    });
+    }
+    // The last component of the last product is still on the way when stopping at delivery
+    const last = products.at(-1)!;
+    const lastPart = (rows[last.name] ?? []).at(-1)?.[0];
+    for (const p of products) {
+      await o.mark(3);
+      await t.arrived(p, (name) => stopAt !== 'delivery' || p !== last || name !== lastPart);
+    }
     if (stopAt === 'delivery') return;
     await o.step(1, 'farhan', 'production_qa', {
       action: 'RETURN',
@@ -522,7 +542,7 @@ export async function seedDemo(
       ['Dextrose anhydrous', 'RAW_MATERIAL', '400 kg', '400 kg'],
       ['Sachet laminate', 'PACKAGING', '20,000', '20,300'],
     ],
-  } as Parameters<typeof components>[1];
+  } as Rows;
   const TPE = { creator: 'sara', mkt: 'rohan', approver: 'priya', heads: ['vikram'] };
   const THC = { creator: 'rahul', mkt: 'nisha', approver: 'arjun', heads: ['meera'] };
 
@@ -530,13 +550,7 @@ export async function seedDemo(
 
   // 1. Phase 1: CBM sent back once, the revision waits for Marketing
   {
-    const o = await order(
-      'cbm',
-      'tpe',
-      'alnoor',
-      '2 products for the Dubai tender; 40ft containers',
-      4,
-    );
+    const o = await order('cbm', 'alnoor', '2 products for the Dubai tender; 40ft containers', 4);
     await o.step(0.5, 'sara', 'cbm', {
       action: 'SUBMIT',
       uploads: [await file('sara', 'CBM', 'CBM_v1.pdf')],
@@ -551,7 +565,7 @@ export async function seedDemo(
   }
   // 2. Phase 1: PI rejected once, now with the Head Approver
   {
-    const o = await order('pi', 'tpe', 'kenya', 'Repeat order, same products as March', 9);
+    const o = await order('pi', 'kenya', 'Repeat order, same products as March', 9);
     await phase1(o, TPE, ['Paracetamol 500mg Tablets', 'ORS Sachets'], {
       rejectPi: true,
       stop: 'head',
@@ -560,34 +574,34 @@ export async function seedDemo(
   }
   // 3. Phase 1: waiting for Accounts to see the advance
   {
-    const o = await order('advance', 'thc', 'medline', 'Capsules only', 10);
+    const o = await order('advance', 'medline', 'Capsules only', 10);
     await phase1(o, THC, ['Amoxicillin 250mg Capsules'], { stop: 'advance' });
     made.push(o);
   }
   // 4. Phase 2: review loops in progress
   {
-    const o = await order('loops', 'tpe', 'andes', 'Two products; Spanish artwork', 21);
+    const o = await order('loops', 'andes', 'Two products; Spanish artwork', 21);
     await phase1(o, TPE, ['Paracetamol 500mg Tablets', 'Amoxicillin 250mg Capsules']);
     await phase2(o, ROWS, 'loops');
     made.push(o);
   }
   // 5. Phase 2: one component still to arrive
   {
-    const o = await order('delivery', 'thc', 'kenya', 'ORS for the rainy season', 30);
+    const o = await order('delivery', 'medline', 'ORS for the rainy season', 30);
     await phase1(o, THC, ['ORS Sachets', 'Paracetamol 500mg Tablets']);
     await phase2(o, ROWS, 'delivery');
     made.push(o);
   }
   // 6. Phase 2: Production QA sent cartons back to Materials
   {
-    const o = await order('qa', 'tpe', 'medline', 'Tablets, urgent', 34);
+    const o = await order('qa', 'kenya', 'Tablets, urgent', 34);
     await phase1(o, TPE, ['Paracetamol 500mg Tablets']);
     await phase2(o, ROWS, 'qa');
     made.push(o);
   }
   // 7. Phase 3: payment check restarted after a short payment
   {
-    const o = await order('payment', 'tpe', 'alnoor', 'Capsules and tablets', 45);
+    const o = await order('payment', 'alnoor', 'Capsules and tablets', 45);
     await phase1(o, TPE, ['Amoxicillin 250mg Capsules', 'Paracetamol 500mg Tablets']);
     await phase2(o, ROWS, 'end');
     await o.step(1, 'imran', 'container', {
@@ -609,19 +623,19 @@ export async function seedDemo(
     });
     await o.step(0.5, 'rohan', 'invoice', { action: 'CONFIRM' });
     await o.step(0.5, 'rohan', 'balance_requested', { action: 'LOG' });
-    await o.step(3, 'pooja', 'payment_check', { action: 'APPROVE', payment: payment('68000') });
+    await o.step(3, 'pooja', 'payment_check', { action: 'APPROVE', payment: payment('5600000') });
     await o.step(0.5, 'rohan', 'payment_check', { action: 'APPROVE' });
     await o.step(1, 'arjun', 'payment_check', {
       action: 'REJECT',
-      comment: 'Short by USD 2,000 after bank charges',
+      comment: 'Short by INR 1,60,000 after bank charges',
     });
-    await o.step(2, 'pooja', 'payment_check', { action: 'APPROVE', payment: payment('2000') });
+    await o.step(2, 'pooja', 'payment_check', { action: 'APPROVE', payment: payment('160000') });
     await o.step(0.5, 'rohan', 'payment_check', { action: 'APPROVE' });
     made.push(o);
   }
   // 8. Phase 3: at sea; the buyer asked for the BoL, now with the Head Approvers
   {
-    const o = await order('bol', 'thc', 'andes', 'ORS sachets', 60);
+    const o = await order('bol', 'gulf', 'ORS sachets', 60);
     await phase1(o, THC, ['ORS Sachets']);
     await phase2(o, ROWS, 'end');
     await o.step(1, 'tara', 'container', { action: 'SUBMIT', comment: '1 × 20ft, 9 pallets' });
@@ -632,7 +646,7 @@ export async function seedDemo(
     });
     await o.step(1, 'nisha', 'invoice', { action: 'CONFIRM' });
     await o.step(0.5, 'nisha', 'balance_requested', { action: 'LOG' });
-    await o.step(2, 'pooja', 'payment_check', { action: 'APPROVE', payment: payment('41000') });
+    await o.step(2, 'pooja', 'payment_check', { action: 'APPROVE', payment: payment('3400000') });
     await o.step(0.5, 'nisha', 'payment_check', { action: 'APPROVE' });
     await o.step(0.5, 'priya', 'payment_check', { action: 'APPROVE' });
     await o.step(0.5, 'meera', 'payment_check', { action: 'APPROVE' });
@@ -664,9 +678,9 @@ export async function seedDemo(
   // 10. Done
   for (const [key, buyerKey, startDays, close] of [
     ['sent', 'kenya', 75, false],
-    ['done', 'medline', 95, true],
+    ['done', 'andes', 95, true],
   ] as const) {
-    const o = await order(key, 'tpe', buyerKey, 'Tablets', startDays);
+    const o = await order(key, buyerKey, 'Tablets', startDays);
     await phase1(o, TPE, ['Paracetamol 500mg Tablets']);
     await phase2(o, ROWS, 'end');
     await o.step(1, 'imran', 'container', { action: 'SUBMIT', comment: '1 × 40ft' });
@@ -677,7 +691,7 @@ export async function seedDemo(
     });
     await o.step(1, 'rohan', 'invoice', { action: 'CONFIRM' });
     await o.step(0.5, 'rohan', 'balance_requested', { action: 'LOG' });
-    await o.step(2, 'pooja', 'payment_check', { action: 'APPROVE', payment: payment('52000') });
+    await o.step(2, 'pooja', 'payment_check', { action: 'APPROVE', payment: payment('4300000') });
     await o.step(0.5, 'rohan', 'payment_check', { action: 'APPROVE' });
     await o.step(0.5, 'arjun', 'payment_check', { action: 'APPROVE' });
     await o.step(0.5, 'meera', 'payment_check', { action: 'APPROVE' });
@@ -715,7 +729,7 @@ export async function seedDemo(
   }
 
   for (const o of made) await spreadOverDays(db, o.id, o.marks, o.startDaysAgo);
-  return { employees: Object.keys(users).length, companies: COMPANIES.length, orders: made.length };
+  return { employees: Object.keys(users).length, buyers: BUYERS.length, orders: made.length };
 }
 
 /**
@@ -781,6 +795,23 @@ async function spreadOverDays(
     await tx.execute(sql`
       update approval_votes v set created_at = (select m.virtual + (v.created_at - m.real) from seed_marks m where m.real <= v.created_at order by m.real desc limit 1)
        where v.task_id in (select id from tasks where order_id = ${orderId})`);
+    // Component dates are the days Materials entered them, now virtual (D27 day counts)
+    for (const [field, col] of [
+      ['poDate', 'po_date'],
+      ['dispatchDate', 'dispatch_date'],
+      ['deliverDate', 'deliver_date'],
+    ] as const) {
+      await tx.execute(sql`
+        update order_components c set ${sql.identifier(col)} = (
+          select (ch.created_at at time zone 'Asia/Kolkata')::date from component_changes ch
+           where ch.component_id = c.id and ch.field = ${field} and ch.new_value is not null
+           order by ch.created_at desc limit 1)
+         where c.order_id = ${orderId} and ${sql.identifier(col)} is not null`);
+      await tx.execute(sql`
+        update component_changes
+           set new_value = to_char((created_at at time zone 'Asia/Kolkata')::date, 'YYYY-MM-DD')
+         where order_id = ${orderId} and field = ${field} and new_value is not null`);
+    }
     // Shipment dates and payment dates follow their own (now virtual) log times
     await tx.execute(
       sql`update shipment_checkpoints set happened_on = (logged_at at time zone 'Asia/Kolkata')::date where order_id = ${orderId}`,

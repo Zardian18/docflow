@@ -11,8 +11,6 @@ import { formatDistanceToNowStrict } from 'date-fns';
 import type { PillTone } from '@/components/StatusPill';
 import { formatDate } from './format';
 
-export const orderRef = (n: number) => `ORD-${String(n).padStart(4, '0')}`;
-
 export const ORDER_TONE: Record<OrderStatus, PillTone> = {
   ACTIVE: 'blue',
   NO_ACTION_NEEDED: 'amber',

@@ -1,5 +1,6 @@
 import {
   DOC_KIND_LABEL,
+  OrderRef,
   SHIPMENT_STATUS_LABEL,
   SHIPMENT_STATUSES,
   stepOf,
@@ -17,6 +18,7 @@ import {
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useId, useState } from 'react';
 import { toast } from 'sonner';
+import { ReviewDocList } from '@/components/DocumentButtons';
 import { FileDropzone, type UploadState } from '@/components/FileDropzone';
 import { FormError } from '@/components/forms';
 import { Button } from '@/components/ui/button';
@@ -60,6 +62,9 @@ function actionLabel(step: StepDef, action: TaskAction): string {
   }
 }
 
+/** Sending back and rejecting need a reason, and look different from going ahead */
+const isNegative = (a: TaskAction) => a === 'RETURN' || a === 'REJECT';
+
 /** The documents a person can attach for this action */
 function docsFor(
   step: StepDef,
@@ -78,9 +83,30 @@ function docsFor(
   return [];
 }
 
+/** Everything one action needs from the form */
+function needsOf(step: StepDef, task: TaskView, action: TaskAction) {
+  const stage =
+    step.kind === 'APPROVAL_CHAIN' ? step.stages.find((s) => s.key === task.side) : undefined;
+  return {
+    docs: docsFor(step, task, action),
+    payment:
+      (step.kind === 'TASK' && step.form === 'PAYMENT' && action === 'COMPLETE') ||
+      (stage?.form === 'PAYMENT' && action === 'APPROVE'),
+    products: step.kind === 'TASK' && step.form === 'PRODUCTS' && action === 'COMPLETE',
+    date: action === 'LOG' || action === 'CHECKPOINT',
+    returnTeams:
+      step.kind === 'REVIEW_LOOP' && action === 'RETURN' && step.submitters.length > 1
+        ? step.submitters.flatMap((a) => ('team' in a ? [a.team] : []))
+        : [],
+    comment: isNegative(action),
+  };
+}
+
 /**
- * One step waiting for the signed-in person, with exactly the inputs that step needs.
- * The server checks everything again; this only keeps people from sending incomplete work.
+ * One step waiting for the signed-in person: the latest document it is about (View and
+ * Download right here), the inputs the step needs, and one button per action that acts
+ * straight away (D27). The server checks everything again; this only keeps people from
+ * sending incomplete work.
  */
 export function TaskActionCard({
   order,
@@ -92,17 +118,18 @@ export function TaskActionCard({
   template: Template;
 }) {
   const step = stepOf(template, task.stepKey);
-  const [action, setAction] = useState<TaskAction>(task.actions[0] as TaskAction);
+  const actions = task.actions as TaskAction[];
   const id = useId();
   const queryClient = useQueryClient();
   const [comment, setComment] = useState('');
   const [date, setDate] = useState(today());
   const [uploads, setUploads] = useState<Record<string, UploadState>>({});
   const [products, setProducts] = useState(order.products.map((p) => p.name).join('\n'));
+  const [ref, setRef] = useState(order.ref);
   const [payment, setPayment] = useState({
     receivedOn: today(),
     amount: '',
-    currency: 'USD',
+    currency: 'INR',
     reference: '',
   });
   const [toTeam, setToTeam] = useState<Team | ''>('');
@@ -111,25 +138,24 @@ export function TaskActionCard({
 
   const stage =
     step.kind === 'APPROVAL_CHAIN' ? step.stages.find((s) => s.key === task.side) : undefined;
-  const docs = docsFor(step, task, action);
-  const needsPayment =
-    (step.kind === 'TASK' && step.form === 'PAYMENT' && action === 'COMPLETE') ||
-    (stage?.form === 'PAYMENT' && action === 'APPROVE');
-  const needsProducts = step.kind === 'TASK' && step.form === 'PRODUCTS' && action === 'COMPLETE';
-  const needsDate = action === 'LOG' || action === 'CHECKPOINT';
-  const returnTeams =
-    step.kind === 'REVIEW_LOOP' && action === 'RETURN' && step.submitters.length > 1
-      ? step.submitters.flatMap((a) => ('team' in a ? [a.team] : []))
-      : [];
-  const commentRequired = action === 'RETURN' || action === 'REJECT';
+  const all = actions.map((a) => ({ action: a, needs: needsOf(step, task, a) }));
+  // The form shows what any of the actions needs; each button checks only its own needs
+  const docs = all
+    .flatMap((x) => x.needs.docs.map((d) => ({ ...d, action: x.action })))
+    .filter((d, i, list) => list.findIndex((x) => x.kind === d.kind) === i);
+  const showPayment = all.some((x) => x.needs.payment);
+  const showProducts = all.some((x) => x.needs.products);
+  const showDate = all.some((x) => x.needs.date);
+  const returnTeams = all.flatMap((x) => x.needs.returnTeams);
+  const negative = actions.find(isNegative);
   const earlierKinds = new Set(
     order.documents.filter((d) => d.taskId === task.id).map((d) => d.kind),
   );
 
   const act = useMutation({
     mutationFn: (body: TaskActionRequest) => api.tasks.act(task.id, body),
-    onSuccess: () => {
-      toast.success(`${step.title}: done`);
+    onSuccess: (_data, body) => {
+      toast.success(`${step.title}: ${actionLabel(step, body.action as TaskAction).toLowerCase()}`);
       for (const key of [
         ['order', order.id],
         ['order-timeline', order.id],
@@ -142,35 +168,45 @@ export function TaskActionCard({
     },
   });
 
-  const submit = () => {
+  const submit = (action: TaskAction) => {
     setProblem(undefined);
-    const attached = docs.flatMap((d) => {
+    const needs = needsOf(step, task, action);
+    const attached = needs.docs.flatMap((d) => {
       const u = uploads[d.kind];
       return u?.kind === 'done' ? [{ uploadId: u.uploadId, kind: d.kind }] : [];
     });
-    const busy = Object.values(uploads).some((u) => u.kind === 'uploading');
-    if (busy) return setProblem('Wait for the upload to finish.');
-    for (const d of docs) {
+    if (Object.values(uploads).some((u) => u.kind === 'uploading')) {
+      return setProblem('Wait for the upload to finish.');
+    }
+    for (const d of needs.docs) {
       if (d.required && !attached.some((a) => a.kind === d.kind) && !earlierKinds.has(d.kind)) {
         return setProblem(`Attach the ${DOC_KIND_LABEL[d.kind]}.`);
       }
     }
-    if (commentRequired && !comment.trim()) return setProblem('Say what needs changing, or why.');
-    if (returnTeams.length && !toTeam) return setProblem('Choose who gets it back.');
+    if (needs.comment && !comment.trim()) {
+      return setProblem(
+        action === 'REJECT' ? 'Give a reason for rejecting.' : 'Say what needs changing.',
+      );
+    }
+    if (needs.returnTeams.length && !toTeam) return setProblem('Choose who gets it back.');
     const productList = products
       .split('\n')
       .map((p) => p.trim())
       .filter(Boolean);
-    if (needsProducts && productList.length === 0) return setProblem('List at least one product.');
-    if (needsPayment && !payment.amount) return setProblem('Enter the amount received.');
+    if (needs.products && productList.length === 0) return setProblem('List at least one product.');
+    if (needs.products) {
+      const checked = OrderRef.safeParse(ref);
+      if (!checked.success) return setProblem(checked.error.issues[0]?.message);
+    }
+    if (needs.payment && !payment.amount) return setProblem('Enter the amount received.');
     act.mutate({
       action,
       comment: comment.trim() || null,
       uploads: attached,
-      ...(needsProducts ? { products: productList } : {}),
-      ...(needsPayment ? { payment: { ...payment, reference: payment.reference || null } } : {}),
-      ...(needsDate ? { date } : {}),
-      ...(returnTeams.length && toTeam ? { toTeam } : {}),
+      ...(needs.products ? { products: productList, orderRef: ref.trim() } : {}),
+      ...(needs.payment ? { payment: { ...payment, reference: payment.reference || null } } : {}),
+      ...(needs.date ? { date } : {}),
+      ...(needs.returnTeams.length && toTeam ? { toTeam } : {}),
       ...(action === 'CHECKPOINT' ? { shipmentStatus: status } : {}),
     });
   };
@@ -178,10 +214,10 @@ export function TaskActionCard({
   return (
     <section
       aria-labelledby={`${id}-title`}
-      className="bg-card border-primary/40 flex flex-col gap-4 rounded-xl border-2 p-4 sm:p-5"
+      className="bg-card border-primary/40 flex min-w-0 flex-col gap-4 rounded-xl border-2 p-4 sm:p-5"
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
+        <div className="min-w-0">
           <h3 id={`${id}-title`} className="text-sm font-semibold">
             {step.title}
             {task.productName && (
@@ -198,32 +234,15 @@ export function TaskActionCard({
         )}
       </div>
 
-      {task.actions.length > 1 && (
-        <div role="radiogroup" aria-label="What to do" className="flex flex-wrap gap-2">
-          {task.actions.map((a) => (
-            <Button
-              key={a}
-              type="button"
-              size="sm"
-              variant={a === action ? 'default' : 'outline'}
-              role="radio"
-              aria-checked={a === action}
-              onClick={() => {
-                setAction(a as TaskAction);
-                setProblem(undefined);
-              }}
-            >
-              {actionLabel(step, a as TaskAction)}
-            </Button>
-          ))}
-        </div>
-      )}
+      <ReviewDocList docs={task.reviewDocs} />
 
       {docs.map((d) => (
         <div key={d.kind} className="flex flex-col gap-1.5">
           <span className="text-muted-foreground text-[13px]">
+            {task.reviewDocs.some((r) => r.kind === d.kind) ? 'New version of the ' : ''}
             {DOC_KIND_LABEL[d.kind]}
             {d.required ? '' : ' (optional)'}
+            {d.action === 'RETURN' && actions.length > 1 && ', when sending back'}
             {earlierKinds.has(d.kind) && ' · already attached; upload only to replace it'}
           </span>
           <FileDropzone
@@ -235,26 +254,46 @@ export function TaskActionCard({
         </div>
       ))}
 
-      {needsProducts && (
-        <div className="flex flex-col gap-1.5">
-          <Label
-            htmlFor={`${id}-products`}
-            className="text-muted-foreground text-[13px] font-normal"
-          >
-            Products on this order, one per line
-          </Label>
-          <Textarea
-            id={`${id}-products`}
-            rows={4}
-            value={products}
-            onChange={(e) => setProducts(e.target.value)}
-          />
-        </div>
+      {showProducts && (
+        <>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`${id}-ref`} className="text-muted-foreground text-[13px] font-normal">
+              Order number
+            </Label>
+            <Input
+              id={`${id}-ref`}
+              value={ref}
+              maxLength={40}
+              onChange={(e) => setRef(e.target.value)}
+              aria-describedby={`${id}-ref-hint`}
+              className="w-full sm:w-72"
+            />
+            <p id={`${id}-ref-hint`} className="text-status-amber text-xs">
+              Change this to match the PI number, so everyone can find the order by it.
+            </p>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label
+              htmlFor={`${id}-products`}
+              className="text-muted-foreground text-[13px] font-normal"
+            >
+              Products on this order, one per line
+            </Label>
+            <Textarea
+              id={`${id}-products`}
+              rows={4}
+              value={products}
+              onChange={(e) => setProducts(e.target.value)}
+            />
+          </div>
+        </>
       )}
 
-      {needsPayment && (
+      {showPayment && (
         <fieldset className="grid gap-3 sm:grid-cols-4">
-          <legend className="text-muted-foreground mb-1.5 text-[13px]">Payment received</legend>
+          <legend className="text-muted-foreground mb-1.5 text-[13px]">
+            Payment received{negative ? ' (when approving)' : ''}
+          </legend>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor={`${id}-received`} className="text-[13px] font-normal">
               Date
@@ -274,7 +313,7 @@ export function TaskActionCard({
             <Input
               id={`${id}-amount`}
               inputMode="decimal"
-              placeholder="125000.00"
+              placeholder="2500000.00"
               value={payment.amount}
               onChange={(e) => setPayment((p) => ({ ...p, amount: e.target.value }))}
             />
@@ -293,11 +332,11 @@ export function TaskActionCard({
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`${id}-ref`} className="text-[13px] font-normal">
+            <Label htmlFor={`${id}-ref-no`} className="text-[13px] font-normal">
               Reference (optional)
             </Label>
             <Input
-              id={`${id}-ref`}
+              id={`${id}-ref-no`}
               value={payment.reference}
               onChange={(e) => setPayment((p) => ({ ...p, reference: e.target.value }))}
             />
@@ -305,7 +344,7 @@ export function TaskActionCard({
         </fieldset>
       )}
 
-      {action === 'CHECKPOINT' && (
+      {actions.includes('CHECKPOINT') && (
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={`${id}-status`} className="text-muted-foreground text-[13px] font-normal">
             Shipment status
@@ -325,7 +364,7 @@ export function TaskActionCard({
         </div>
       )}
 
-      {needsDate && (
+      {showDate && (
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={`${id}-date`} className="text-muted-foreground text-[13px] font-normal">
             When it happened
@@ -344,7 +383,7 @@ export function TaskActionCard({
       {returnTeams.length > 0 && (
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={`${id}-to`} className="text-muted-foreground text-[13px] font-normal">
-            Who gets it back
+            Who gets it back, when sending back
           </Label>
           <Select value={toTeam} onValueChange={(v) => setToTeam(v as Team)}>
             <SelectTrigger id={`${id}-to`} className="w-full sm:w-64">
@@ -363,7 +402,11 @@ export function TaskActionCard({
 
       <div className="flex flex-col gap-1.5">
         <Label htmlFor={`${id}-comment`} className="text-muted-foreground text-[13px] font-normal">
-          {commentRequired ? 'Comments (required)' : 'Comments (optional)'}
+          {negative === 'REJECT'
+            ? 'Comments (required to reject)'
+            : negative === 'RETURN'
+              ? 'Comments (required to send back)'
+              : 'Comments (optional)'}
         </Label>
         <Textarea
           id={`${id}-comment`}
@@ -375,15 +418,19 @@ export function TaskActionCard({
       </div>
 
       <FormError message={problem ?? (act.error ? errorMessage(act.error) : undefined)} />
-      <div>
-        <Button
-          type="button"
-          onClick={submit}
-          disabled={act.isPending}
-          variant={action === 'REJECT' || action === 'RETURN' ? 'outline' : 'default'}
-        >
-          {act.isPending ? 'Saving…' : actionLabel(step, action)}
-        </Button>
+      <div className="flex flex-wrap gap-2">
+        {actions.map((a) => (
+          <Button
+            key={a}
+            type="button"
+            onClick={() => submit(a)}
+            disabled={act.isPending}
+            variant={isNegative(a) ? 'outline' : 'default'}
+            className={isNegative(a) ? 'text-destructive' : undefined}
+          >
+            {act.isPending && act.variables?.action === a ? 'Saving…' : actionLabel(step, a)}
+          </Button>
+        ))}
       </div>
     </section>
   );

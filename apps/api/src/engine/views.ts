@@ -1,13 +1,17 @@
 import {
+  COMPONENT_REQUIRED_FIELDS,
   SLOT_INFO,
   SLOTS,
   stepOf,
   type Component,
+  type ComponentStatus,
   type ComponentTables,
   type DocKind,
   type OrderDetail,
   type OrderEvent,
+  type ReviewDoc,
   type ShipmentStatus,
+  type StepDef,
   type TaskView,
 } from '@docflow/shared';
 import { asc, eq, inArray } from 'drizzle-orm';
@@ -17,7 +21,6 @@ import {
   approvalVotes,
   buyers,
   channelRounds,
-  companies,
   documents,
   employees,
   holderIntervals,
@@ -35,8 +38,16 @@ import {
   canSeeOrder,
   currentPhase,
 } from './access.js';
-import { daysSinceDate, heldClock, sinceClock } from './clock.js';
-import { actionsFor, holderLabel, loadCtx, type OrderCtx } from './engine.js';
+import { dayCount, heldClock, localDay, sinceClock } from './clock.js';
+import {
+  actionsFor,
+  canEditChain,
+  canRename,
+  editableSlots,
+  holderLabel,
+  loadCtx,
+  type OrderCtx,
+} from './engine.js';
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null);
 
@@ -57,8 +68,60 @@ export async function visibleCtx(db: Db, user: AuthUser, orderId: string) {
   return ctx;
 }
 
+type DocRow = typeof documents.$inferSelect;
+
+/** The document kinds a step is about: what it attaches, and what its approval chain approves */
+function reviewKinds(step: StepDef): DocKind[] {
+  switch (step.kind) {
+    case 'TASK':
+      return (step.docs ?? []).map((d) => d.kind);
+    case 'REVIEW_LOOP':
+      return step.doc ? [step.doc] : [];
+    case 'APPROVAL_CHAIN':
+      return [
+        ...(step.docToApprove ?? []),
+        ...(step.stages.some((s) => s.form === 'PAYMENT') ? (['PAYMENT_PROOF'] as const) : []),
+      ].filter((k, i, all) => all.indexOf(k) === i);
+    default:
+      return [];
+  }
+}
+
+/**
+ * The latest version of each document a task is about, that this person may open (D27):
+ * what was attached on the task itself, or for an approval chain, the latest on the order.
+ */
+export function reviewDocsFor(
+  user: AuthUser,
+  ctx: OrderCtx,
+  task: { id: string; stepKey: string },
+  docs: DocRow[],
+): ReviewDoc[] {
+  const step = stepOf(ctx.template, task.stepKey);
+  const latest = (rows: DocRow[]) =>
+    rows.reduce<DocRow | undefined>(
+      (a, b) => (!a || b.uploadedAt >= a.uploadedAt ? b : a),
+      undefined,
+    );
+  return reviewKinds(step).flatMap((kind) => {
+    if (!canSeeDoc(user, ctx, kind)) return [];
+    const ofKind = docs.filter((d) => d.kind === kind);
+    const doc =
+      latest(ofKind.filter((d) => d.taskId === task.id)) ??
+      (step.kind === 'APPROVAL_CHAIN' ? latest(ofKind) : undefined);
+    return doc
+      ? [{ id: doc.id, kind: doc.kind, fileName: doc.fileName, fileMime: doc.fileMime }]
+      : [];
+  });
+}
+
 /** Task views with who holds each, how long, and what this person can do */
-export async function taskViews(db: Db, user: AuthUser, ctx: OrderCtx): Promise<TaskView[]> {
+export async function taskViews(
+  db: Db,
+  user: AuthUser,
+  ctx: OrderCtx,
+  docs: DocRow[],
+): Promise<TaskView[]> {
   const intervals = await db
     .select()
     .from(holderIntervals)
@@ -111,6 +174,7 @@ export async function taskViews(db: Db, user: AuthUser, ctx: OrderCtx): Promise<
       doneByName: t.doneBy ? (names.get(t.doneBy) ?? null) : null,
       held: holder ? heldClock(sameHolder) : null,
       actions: await actionsFor(db, user, ctx, t),
+      reviewDocs: reviewDocsFor(user, ctx, t, docs),
     });
   }
   return views;
@@ -119,12 +183,8 @@ export async function taskViews(db: Db, user: AuthUser, ctx: OrderCtx): Promise<
 export async function orderDetail(db: Db, user: AuthUser, orderId: string): Promise<OrderDetail> {
   const ctx = await visibleCtx(db, user, orderId);
   const o = ctx.order;
-  const [[buyer], [company], docs, rounds, votes, pays, checkpoints] = await Promise.all([
+  const [[buyer], docs, rounds, votes, pays, checkpoints] = await Promise.all([
     db.select({ name: buyers.name }).from(buyers).where(eq(buyers.id, o.buyerId)),
-    db
-      .select({ id: companies.id, name: companies.name, code: companies.code })
-      .from(companies)
-      .where(eq(companies.id, o.companyId)),
     db
       .select()
       .from(documents)
@@ -162,14 +222,14 @@ export async function orderDetail(db: Db, user: AuthUser, orderId: string): Prom
     ...[...ctx.slots.values()].flat(),
   ]);
   const name = (id: string | null) => (id ? (names.get(id) ?? '—') : null);
-  const tasksView = await taskViews(db, user, ctx);
+  const tasksView = await taskViews(db, user, ctx, docs);
   // Payments carry amounts, so the same people who may see the full PI see them
   const seePayments = canSeeDoc(user, ctx, 'PI_FULL') || canSeeDoc(user, ctx, 'PAYMENT_PROOF');
   return {
     id: o.id,
     number: o.number,
+    ref: o.ref,
     buyerName: buyer!.name,
-    company: company!,
     status: o.status,
     phase: currentPhase(ctx),
     current: tasksView
@@ -257,6 +317,8 @@ export async function orderDetail(db: Db, user: AuthUser, orderId: string): Prom
       (o.status === 'ACTIVE' || o.status === 'NO_ACTION_NEEDED') &&
       (user.capabilities.includes('ADMIN') || (ctx.slots.get('MARKETING') ?? []).includes(user.id)),
     canSeeComponents: canSeeComponents(user, ctx),
+    canRename: canRename(user, ctx),
+    editableSlots: canEditChain(user, ctx) ? editableSlots(ctx) : [],
   };
 }
 
@@ -313,6 +375,18 @@ export async function componentTables(
     .from(orderProducts)
     .where(eq(orderProducts.orderId, orderId))
     .orderBy(asc(orderProducts.position));
+  // Ordering delay counts from the day production started, in India time (D27)
+  const productionDay = ctx.order.productionStartedAt
+    ? localDay(ctx.order.productionStartedAt)
+    : null;
+  const statusOf = (r: (typeof rows)[number]): ComponentStatus =>
+    r.deliverDate
+      ? 'DELIVERED'
+      : r.dispatchDate
+        ? 'DISPATCHED'
+        : r.poDate
+          ? 'ORDERED'
+          : 'NOT_ORDERED';
   return {
     products: products.map((p) => {
       const components: Component[] = rows
@@ -332,7 +406,10 @@ export async function componentTables(
           challanNo: r.challanNo,
           tridentRemark: r.tridentRemark,
           tnsRemark: r.tnsRemark,
-          daysSincePo: r.deliverDate ? null : daysSinceDate(r.poDate),
+          status: statusOf(r),
+          orderingDays: dayCount(productionDay, r.poDate),
+          deliveryDays: dayCount(r.poDate, r.deliverDate),
+          missing: COMPONENT_REQUIRED_FIELDS.filter((f) => r[f] === null),
           delivered: r.deliverDate !== null,
           updatedAt: r.updatedAt.toISOString(),
         }));

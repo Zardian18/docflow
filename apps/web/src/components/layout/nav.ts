@@ -17,7 +17,6 @@ export function navFor(me: Pick<Me, 'teams' | 'capabilities'>): NavItem[] {
   if (can('MARKETING')) items.push({ label: 'New Order', to: '/orders/new' });
   if (can('ADMIN')) {
     items.push({ label: 'Employees', to: '/admin/employees' });
-    items.push({ label: 'Companies', to: '/admin/companies' });
   }
   if (can('ADMIN') || can('MARKETING')) items.push({ label: 'Buyers', to: '/admin/buyers' });
   return items;

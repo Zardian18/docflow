@@ -21,7 +21,6 @@ import { AppError } from './errors.js';
 import { authPlugin } from './plugins/auth.js';
 import { csrfPlugin } from './plugins/csrf.js';
 import { authRoutes } from './routes/auth.js';
-import { companyRoutes } from './routes/companies.js';
 import { DEFAULT_LIMITS, type Limits } from './routes/deps.js';
 import { employeeRoutes } from './routes/employees.js';
 import { buyerRoutes } from './routes/buyers.js';
@@ -219,7 +218,6 @@ export async function buildApp({
   await app.register(authRoutes, { ...deps, prefix: '/v1/auth' });
   await app.register(employeeRoutes, { ...deps, storage, prefix: '/v1/employees' });
   await app.register(lookupRoutes, deps);
-  await app.register(companyRoutes, { ...deps, prefix: '/v1/companies' });
   await app.register(buyerRoutes, { ...deps, prefix: '/v1/buyers' });
   await app.register(uploadRoutes, { ...deps, storage, prefix: '/v1/uploads' });
   await app.register(orderRoutes, { ...deps, storage });

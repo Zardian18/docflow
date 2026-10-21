@@ -6,9 +6,8 @@ import { errorMessage } from '@/lib/api';
 import { RequireAuth } from '@/lib/auth';
 import { homeFor } from '@/lib/people';
 import { ChangePasswordPage } from '@/pages/account/ChangePasswordPage';
-import { BuyersPage } from '@/pages/admin/BuyersPage';
-import { CompaniesPage } from '@/pages/admin/companies/CompaniesPage';
-import { CompanyFormPage } from '@/pages/admin/companies/CompanyFormPage';
+import { BuyerFormPage } from '@/pages/admin/buyers/BuyerFormPage';
+import { BuyersPage } from '@/pages/admin/buyers/BuyersPage';
 import { EmployeesPage } from '@/pages/admin/EmployeesPage';
 import { AuthCard } from '@/pages/auth/AuthCard';
 import { ForgotPasswordPage } from '@/pages/auth/ForgotPasswordPage';
@@ -68,16 +67,17 @@ export const router = createBrowserRouter([
           },
           {
             element: <Allow capabilities={['ADMIN', 'MARKETING']} />,
-            children: [{ path: '/admin/buyers', element: <BuyersPage /> }],
+            children: [
+              { path: '/admin/buyers', element: <BuyersPage /> },
+              { path: '/admin/buyers/new', element: <BuyerFormPage /> },
+              { path: '/admin/buyers/:id', element: <BuyerFormPage /> },
+            ],
           },
           {
             element: <Allow capabilities={['ADMIN']} />,
             children: [
               { path: '/admin', element: <Navigate to="/orders" replace /> },
               { path: '/admin/employees', element: <EmployeesPage /> },
-              { path: '/admin/companies', element: <CompaniesPage /> },
-              { path: '/admin/companies/new', element: <CompanyFormPage /> },
-              { path: '/admin/companies/:id', element: <CompanyFormPage /> },
             ],
           },
         ],

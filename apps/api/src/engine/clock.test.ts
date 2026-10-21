@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { daysSinceDate, heldClock, instantForLocalDate, localDay, sinceClock } from './clock.js';
+import { dayCount, heldClock, instantForLocalDate, localDay, sinceClock } from './clock.js';
 
 const at = (s: string) => new Date(s);
 
@@ -45,8 +45,12 @@ describe('Trackers A and B: calendar days in India time (Q51)', () => {
     expect(() => instantForLocalDate('2026-10-11', now)).toThrow();
   });
 
-  it('counts days since a PO date', () => {
-    expect(daysSinceDate('2026-10-01', at('2026-10-21T06:00:00Z'))).toBe(20);
-    expect(daysSinceDate(null)).toBeNull();
+  it('counts component days: running until the end date is filled in, then fixed (D27)', () => {
+    const now = at('2026-10-21T06:00:00Z');
+    expect(dayCount('2026-10-01', null, now)).toEqual({ days: 20, running: true });
+    expect(dayCount('2026-10-01', '2026-10-05', now)).toEqual({ days: 4, running: false });
+    expect(dayCount(null, '2026-10-05', now)).toBeNull();
+    // An end before the start (a typing mistake) never shows negative days
+    expect(dayCount('2026-10-05', '2026-10-01', now)).toEqual({ days: 0, running: false });
   });
 });

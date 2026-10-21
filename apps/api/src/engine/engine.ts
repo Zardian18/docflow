@@ -1,14 +1,17 @@
 import {
+  COMPONENT_REQUIRED_FIELDS,
   CURRENT_TEMPLATE,
   findTemplate,
   SLOT_INFO,
   SLOTS,
   slotProblems,
   stepOf,
+  TAG_LABEL,
   TEAM_LABEL,
   type Actor,
   type Gate,
   OrderCreate,
+  orderRef,
   type Slot,
   type StepDef,
   type TaskAction,
@@ -23,10 +26,9 @@ import type { Db, Tx } from '../db/client.js';
 import {
   approvalVotes,
   buyers,
+  buyerSlotGates,
+  buyerSlotPeople,
   channelRounds,
-  companies,
-  companySlotGates,
-  companySlotPeople,
   documents,
   employeeCapabilities,
   employees,
@@ -43,6 +45,7 @@ import {
 } from '../db/schema.js';
 import { AppError, conflict, forbidden, notFound } from '../errors.js';
 import type { StorageService } from '../storage/storage.js';
+import { canSeeOrder } from './access.js';
 import { instantForLocalDate } from './clock.js';
 import { attachFiles, prepareFiles, removeUploadObjects } from './files.js';
 
@@ -399,15 +402,19 @@ function depsDone(ctx: OrderCtx, step: StepDef, productId: string | null) {
 
 async function gateSatisfied(tx: Tx, ctx: OrderCtx, step: StepDef) {
   if (step.kind !== 'DATA_GATE') return false;
-  // ALL_COMPONENTS_DELIVERED: every product has components, and every one has a Deliver Date
+  // Every product has components, and every component is far enough along
   const rows = await tx
-    .select({ productId: orderComponents.productId, deliverDate: orderComponents.deliverDate })
+    .select()
     .from(orderComponents)
     .where(eq(orderComponents.orderId, ctx.order.id));
+  const ready = (r: (typeof rows)[number]) =>
+    step.condition === 'ALL_COMPONENTS_DELIVERED'
+      ? r.deliverDate !== null
+      : COMPONENT_REQUIRED_FIELDS.every((f) => r[f] !== null);
   return (
     ctx.products.length > 0 &&
     ctx.products.every((p) => rows.some((r) => r.productId === p.id)) &&
-    rows.every((r) => r.deliverDate !== null)
+    rows.every(ready)
   );
 }
 
@@ -475,73 +482,233 @@ export async function checkSlots(tx: Tx, slots: Map<Slot, string[]>, requireAll:
   }
 }
 
-/** Marketing creates an order (Q2); named people come from the company, changeable here (Q61). */
+async function refTaken(tx: Tx, ref: string, exceptOrderId?: string) {
+  const [row] = await tx
+    .select({ id: orders.id })
+    .from(orders)
+    .where(sql`lower(${orders.ref}) = lower(${ref})`);
+  return row !== undefined && row.id !== exceptOrderId;
+}
+
+/** An unused order number: ORD-0007, or ORD-0007-2 if an order was already renamed to it */
+async function freshRef(tx: Tx, number: number) {
+  for (let n = 1; ; n++) {
+    const ref = n === 1 ? orderRef(number) : `${orderRef(number)}-${n}`;
+    if (!(await refTaken(tx, ref))) return ref;
+  }
+}
+
+/**
+ * Marketing creates an order (Q2). The chain comes from the buyer's default (D27), and
+ * Marketing can change its people and ALL/ANY settings for this order only (Q61).
+ */
 export async function createOrder(db: Db, user: AuthUser, input: CreateInput) {
   if (!user.capabilities.includes('MARKETING')) throw forbidden();
   return db.transaction(async (tx) => {
     const [buyer] = await tx.select().from(buyers).where(eq(buyers.id, input.buyerId));
     if (!buyer?.isActive) throw badRequest('BUYER_UNAVAILABLE', 'Choose an active buyer.');
-    const [company] = await tx.select().from(companies).where(eq(companies.id, input.companyId));
-    if (!company?.isActive) throw badRequest('COMPANY_UNAVAILABLE', 'Choose an active company.');
 
     const configured = await tx
       .select()
-      .from(companySlotPeople)
-      .where(eq(companySlotPeople.companyId, company.id))
-      .orderBy(asc(companySlotPeople.ordinal));
+      .from(buyerSlotPeople)
+      .where(eq(buyerSlotPeople.buyerId, buyer.id))
+      .orderBy(asc(buyerSlotPeople.ordinal));
     const slots = new Map<Slot, string[]>();
     for (const r of configured) slots.set(r.slot, [...(slots.get(r.slot) ?? []), r.employeeId]);
     for (const s of input.slots) slots.set(s.slot, s.employeeIds);
-    // Whoever creates the order is its Marketing person unless the company names someone
+    // Whoever creates the order is its Marketing person unless the buyer names someone
     if ((slots.get('MARKETING') ?? []).length === 0) slots.set('MARKETING', [user.id]);
     await checkSlots(tx, slots, true);
+    const defaultGates = await tx
+      .select()
+      .from(buyerSlotGates)
+      .where(eq(buyerSlotGates.buyerId, buyer.id));
+    const gateFor = (slot: Slot): Gate =>
+      input.slots.find((s) => s.slot === slot)?.gate ??
+      defaultGates.find((g) => g.slot === slot)?.gate ??
+      'ALL';
 
     const template = CURRENT_TEMPLATE;
-    const [order] = await tx
+    const [created] = await tx
       .insert(orders)
       .values({
+        // Replaced right below, once the sequence has given this order its number
+        ref: `new-${crypto.randomUUID()}`,
         buyerId: buyer.id,
-        companyId: company.id,
         templateKey: template.key,
         templateVersion: template.version,
         notes: input.notes,
         createdBy: user.id,
       })
       .returning();
+    const ref = await freshRef(tx, created!.number);
+    await tx.update(orders).set({ ref }).where(eq(orders.id, created!.id));
+    const orderId = created!.id;
     await tx
       .insert(orderSlotPeople)
       .values(
         [...slots].flatMap(([slot, ids]) =>
-          ids.map((employeeId, ordinal) => ({ orderId: order!.id, slot, employeeId, ordinal })),
+          ids.map((employeeId, ordinal) => ({ orderId, slot, employeeId, ordinal })),
         ),
       );
-    const gates = await tx
-      .select()
-      .from(companySlotGates)
-      .where(eq(companySlotGates.companyId, company.id));
     const gateRows = SLOTS.filter((s) => SLOT_INFO[s].hasGate).map((slot) => ({
-      orderId: order!.id,
+      orderId,
       slot,
-      gate: gates.find((g) => g.slot === slot)?.gate ?? ('ALL' as const),
+      gate: gateFor(slot),
     }));
     await tx.insert(orderSlotGates).values(gateRows);
     await logEvent(tx, {
-      orderId: order!.id,
+      orderId,
       type: 'ORDER_CREATED',
       actorId: user.id,
       actingAs: 'MARKETING',
       comment: input.notes,
       details: {
+        ref,
         buyer: buyer.name,
-        company: company.name,
         template: `${template.key} v${template.version}`,
         slots: Object.fromEntries(slots),
         gates: Object.fromEntries(gateRows.map((g) => [g.slot, g.gate])),
       },
     });
-    const ctx = await loadCtx(tx, order!.id, true);
+    const ctx = await loadCtx(tx, orderId, true);
     await advance(tx, ctx);
-    return order!.id;
+    return orderId;
+  });
+}
+
+const inSlot = (ctx: OrderCtx, slot: Slot, userId: string) =>
+  (ctx.slots.get(slot) ?? []).includes(userId);
+
+/** Who may change the order number: the Creator, the order's Marketing person, and Admin (D27) */
+export function canRename(user: Pick<AuthUser, 'id' | 'capabilities'>, ctx: OrderCtx) {
+  if (ctx.order.status === 'DONE' || ctx.order.status === 'CANCELLED') return false;
+  return (
+    user.capabilities.includes('ADMIN') ||
+    inSlot(ctx, 'CREATOR', user.id) ||
+    inSlot(ctx, 'MARKETING', user.id)
+  );
+}
+
+async function setRef(tx: Tx, ctx: OrderCtx, ref: string, actorId: string, actingAs: string) {
+  const next = ref.trim();
+  if (next === ctx.order.ref) return;
+  if (await refTaken(tx, next, ctx.order.id)) {
+    throw conflict('REF_TAKEN', `Another order already uses ${next}.`);
+  }
+  await tx
+    .update(orders)
+    .set({ ref: next, updatedAt: new Date() })
+    .where(eq(orders.id, ctx.order.id));
+  await logEvent(tx, {
+    orderId: ctx.order.id,
+    type: 'ORDER_RENAMED',
+    actorId,
+    actingAs,
+    details: { from: ctx.order.ref, to: next },
+  });
+  ctx.order.ref = next;
+}
+
+export async function renameOrder(db: Db, user: AuthUser, orderId: string, ref: string) {
+  await db.transaction(async (tx) => {
+    const ctx = await loadCtx(tx, orderId, true);
+    if (!canSeeOrder(user, ctx)) throw notFound('Order');
+    if (!canRename(user, ctx)) throw forbidden();
+    const actingAs = inSlot(ctx, 'CREATOR', user.id)
+      ? 'CREATOR'
+      : inSlot(ctx, 'MARKETING', user.id)
+        ? 'MARKETING'
+        : 'ADMIN';
+    await setRef(tx, ctx, ref, user.id, actingAs);
+  });
+}
+
+/**
+ * Approval slots whose stage hasn't started yet in the current run, so Marketing can still
+ * change their people and ALL/ANY for this order (D27). A chain waiting to (re-)run counts as
+ * not started.
+ */
+export function editableSlots(ctx: OrderCtx): Slot[] {
+  if (ctx.order.status === 'DONE' || ctx.order.status === 'CANCELLED') return [];
+  const result = new Set<Slot>();
+  for (const step of ctx.template.steps) {
+    if (step.kind !== 'APPROVAL_CHAIN') continue;
+    const task = taskOf(ctx, step.key, null);
+    const current = task ? step.stages.findIndex((s) => s.key === task.side) : -1;
+    for (const [index, stage] of step.stages.entries()) {
+      if (!('slot' in stage.actor) || !SLOT_INFO[stage.actor.slot].hasGate) continue;
+      const started =
+        task !== undefined &&
+        (task.status === 'DONE' ||
+          task.status === 'CANCELLED' ||
+          (task.status === 'OPEN' && current >= index));
+      if (!started) result.add(stage.actor.slot);
+    }
+  }
+  return [...result];
+}
+
+/** The order's Marketing person, and Admin, may change its chain (D27) */
+export function canEditChain(user: Pick<AuthUser, 'id' | 'capabilities'>, ctx: OrderCtx) {
+  return (
+    user.capabilities.includes('ADMIN') ||
+    (user.capabilities.includes('MARKETING') && inSlot(ctx, 'MARKETING', user.id))
+  );
+}
+
+/** Marketing changes one approval slot of this order before its stage starts (D27). */
+export async function updateOrderSlot(
+  db: Db,
+  user: AuthUser,
+  orderId: string,
+  slot: Slot,
+  input: { employeeIds: string[]; gate: Gate; reason: string | null },
+) {
+  await db.transaction(async (tx) => {
+    const ctx = await loadCtx(tx, orderId, true);
+    // An order someone can't see is a 404, never a 403 (invariant 9)
+    if (!canSeeOrder(user, ctx)) throw notFound('Order');
+    if (!canEditChain(user, ctx)) throw forbidden();
+    if (!editableSlots(ctx).includes(slot)) {
+      throw conflict(
+        'STAGE_STARTED',
+        `The ${SLOT_INFO[slot].label} stage has already started, so it can't be changed now.`,
+      );
+    }
+    const next = new Map(ctx.slots);
+    next.set(slot, input.employeeIds);
+    await checkSlots(tx, next, true);
+    await tx
+      .delete(orderSlotPeople)
+      .where(and(eq(orderSlotPeople.orderId, orderId), eq(orderSlotPeople.slot, slot)));
+    await tx
+      .insert(orderSlotPeople)
+      .values(
+        input.employeeIds.map((employeeId, ordinal) => ({ orderId, slot, employeeId, ordinal })),
+      );
+    await tx
+      .insert(orderSlotGates)
+      .values({ orderId, slot, gate: input.gate })
+      .onConflictDoUpdate({
+        target: [orderSlotGates.orderId, orderSlotGates.slot],
+        set: { gate: input.gate },
+      });
+    await logEvent(tx, {
+      orderId,
+      type: 'SLOT_CHANGED',
+      actorId: user.id,
+      actingAs: inSlot(ctx, 'MARKETING', user.id) ? 'MARKETING' : 'ADMIN',
+      comment: input.reason,
+      details: {
+        slot,
+        from: ctx.slots.get(slot) ?? [],
+        to: input.employeeIds,
+        gateFrom: ctx.gates.get(slot) ?? 'ALL',
+        gate: input.gate,
+      },
+    });
+    await tx.update(orders).set({ updatedAt: new Date() }).where(eq(orders.id, orderId));
   });
 }
 
@@ -831,9 +998,31 @@ async function completeTaskStep(
       );
     }
   }
+  if (step.needsComponents) {
+    const [listed] = await tx
+      .select({ id: orderComponents.id })
+      .from(orderComponents)
+      .where(
+        and(
+          eq(orderComponents.productId, task.productId!),
+          eq(orderComponents.kind, step.needsComponents),
+        ),
+      )
+      .limit(1);
+    if (!listed) {
+      throw badRequest(
+        'COMPONENTS_REQUIRED',
+        `Add at least one ${TAG_LABEL[step.needsComponents].toLowerCase()} component for this product in the Materials tab first.`,
+        { kind: step.needsComponents },
+      );
+    }
+  }
   const details: Record<string, unknown> = {
     documents: docs.map((d) => ({ id: d.id, kind: d.kind, fileName: d.fileName })),
   };
+  if (step.form === 'PRODUCTS' && input.orderRef) {
+    await setRef(tx, ctx, input.orderRef, base.actorId, base.actingAs);
+  }
   if (step.form === 'PRODUCTS') {
     const names = (input.products ?? []).map((n) => n.trim()).filter(Boolean);
     if (names.length === 0) throw badRequest('PRODUCTS_REQUIRED', 'List at least one product.');

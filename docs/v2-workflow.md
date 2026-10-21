@@ -7,7 +7,7 @@ How an export order moves through DocFlow v2, from the buyer's first requirement
 | Tag | Meaning |
 |---|---|
 | **[Team]** | Anyone in that team can do it (Regulation, Materials, Design, Production, Accounts, Logistics) |
-| **[Named]** | A specific person, set per company (Creator, Marketing, Approver, Head Approver) |
+| **[Named]** | A specific person, from the buyer's default chain, changeable per order by Marketing (Creator, Marketing, Approver, Head Approver) |
 | **[Loop]** | A back-and-forth where every round is recorded |
 | **[Auto]** | The app does it |
 
@@ -21,12 +21,12 @@ Ends when Accounts confirms the advance payment arrived. That starts production.
 
 ```mermaid
 flowchart TB
-  A["Marketing creates the order<br/>buyer · company · Creator"] --> B{{"CBM loop<br/>Creator ⇄ Marketing"}}
+  A["Marketing creates the order<br/>buyer · its chain"] --> B{{"CBM loop<br/>Creator ⇄ Marketing"}}
   B -->|Marketing confirms| C["Buyer confirmed the CBM<br/>⏱ Tracker B starts"]
   C --> D["Creator uploads the PI<br/>full version + version without rates"]
   D --> E["Marketing approves"]
   E --> F["Approver approves"]
-  F --> G["Head Approver(s) approve<br/>ALL or ANY, per company"]
+  F --> G["Head Approver(s) approve<br/>ALL or ANY, per order"]
   E -.->|rejects with reason| D
   F -.->|rejects with reason| D
   G -.->|rejects with reason| D
@@ -34,11 +34,11 @@ flowchart TB
   H --> I["Accounts verifies the advance<br/>date · amount · reference · proof<br/>⏱ Tracker A starts"]
 ```
 
-1. **[Named] Marketing** creates the order in the app: buyer (from a Buyer list), company, and which Creator drafts it. Talking to the buyer before this happens outside the app.
+1. **[Named] Marketing** creates the order in the app: the buyer (from the Buyer list; the buyer is the company), whose default chain fills in the Creator and approvers. Marketing can change the people and ALL/ANY for this order (D27). Talking to the buyer before this happens outside the app.
 2. **[Named] Creator ⇄ Marketing [Loop: CBM].** The Creator uploads the CBM (a file). Marketing confirms it or sends it back with a required comment, as many rounds as needed.
 3. **[Named] Marketing** presses **"Buyer confirmed CBM"**, with the date. This starts **Tracker B**, and the PI task opens for the Creator automatically.
-4. **[Named] Creator** uploads two files, the **full PI** and the **PI without rates, buyer name or address**, and lists the order's products.
-5. **[Named] Marketing → Approver → Head Approver(s)** approve in that order. Head Approvers use ALL or ANY, as set for the company. Any of them can reject with a reason: the PI goes back to the Creator, and after the fix the approvals start again from Marketing.
+4. **[Named] Creator** uploads two files, the **full PI** and the **PI without rates, buyer name or address**, and lists the order's products. The app prompts them to change the order number (ORD-0007 at first) to the PI number (D27).
+5. **[Named] Marketing → Approver → Head Approver(s)** approve in that order. Each approval uses ALL or ANY, as set for the order. Any of them can reject with a reason: the PI goes back to the Creator, and after the fix the approvals start again from Marketing.
 6. **[Named] Marketing** logs that the PI was sent and the advance payment was requested.
 7. **[Team] Accounts** verifies the advance arrived (date, amount, reference, optional proof). **Phase 2 starts**, along with **Tracker A**.
 
@@ -147,7 +147,7 @@ In the owner's Tracker C example (Materials day 1, Regulation 3 days, Materials 
 
 ### Dashboards and the live chain view
 - **One dashboard per person,** with a tab per team or role and an "All my work" tab. The task waiting longest is at the top.
-- **Filters:** buyer, company, dates and stage. Materials can also filter by raw material or packaging (both are shown by default).
+- **Filters:** buyer, dates and stage. Materials can also filter by raw material or packaging (both are shown by default).
 - **Live chain view:** any order opens to its whole chain, showing every step and every loop round with who, when and their comment, with today's position highlighted.
 - **No emails.** People sign in daily and work from their dashboard.
 

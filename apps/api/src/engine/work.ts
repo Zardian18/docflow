@@ -10,11 +10,14 @@ import {
   type WorkQuery,
   type WorkResponse,
 } from '@docflow/shared';
-import { sql } from 'drizzle-orm';
+import { inArray, sql } from 'drizzle-orm';
 import type { z } from 'zod';
 import type { AuthUser } from '../auth/sessions.js';
 import type { Db } from '../db/client.js';
+import { documents } from '../db/schema.js';
 import { sinceClock } from './clock.js';
+import { loadCtx } from './engine.js';
+import { reviewDocsFor } from './views.js';
 
 type Query = z.output<typeof WorkQuery>;
 
@@ -22,10 +25,9 @@ interface Row extends Record<string, unknown> {
   task_id: string;
   order_id: string;
   number: number;
+  ref: string;
   buyer_id: string;
   buyer_name: string;
-  company_id: string;
-  company_name: string;
   step_key: string;
   phase: number;
   product_name: string | null;
@@ -51,15 +53,14 @@ export async function myWork(db: Db, user: AuthUser, query: Query): Promise<Work
       )})`
     : sql`false`;
   const base = sql`
-    select t.id as task_id, t.order_id, o.number, b.id as buyer_id, b.name as buyer_name,
-           c.id as company_id, c.name as company_name, t.step_key, t.phase,
+    select t.id as task_id, t.order_id, o.number, o.ref, b.id as buyer_id, b.name as buyer_name,
+           t.step_key, t.phase,
            p.name as product_name, t.tag, t.holder_team, t.holder_slot, t.side,
            o.template_key, o.template_version, hi.started_at as waiting_since,
            h.held_seconds, h.held_since, o.production_started_at, o.chain_started_at
       from tasks t
       join orders o on o.id = t.order_id
       join buyers b on b.id = o.buyer_id
-      join companies c on c.id = o.company_id
       left join order_products p on p.id = t.product_id
       join holder_intervals hi on hi.task_id = t.id and hi.ended_at is null
       cross join lateral (
@@ -86,7 +87,6 @@ export async function myWork(db: Db, user: AuthUser, query: Query): Promise<Work
     if (query.tab === 'NAMED' && !r.holder_slot) return false;
     if (query.tab && query.tab !== 'NAMED' && r.holder_team !== query.tab) return false;
     if (query.buyerId && r.buyer_id !== query.buyerId) return false;
-    if (query.companyId && r.company_id !== query.companyId) return false;
     if (query.stepKey && r.step_key !== query.stepKey) return false;
     if (query.tag && r.tag !== query.tag) return false;
     const since = new Date(r.waiting_since);
@@ -94,8 +94,8 @@ export async function myWork(db: Db, user: AuthUser, query: Query): Promise<Work
     if (query.until && since > new Date(query.until)) return false;
     if (query.q) {
       const needle = query.q.toLowerCase();
-      const ref = `ord-${String(r.number).padStart(4, '0')}`;
-      if (!r.buyer_name.toLowerCase().includes(needle) && !ref.includes(needle)) return false;
+      if (!r.buyer_name.toLowerCase().includes(needle) && !r.ref.toLowerCase().includes(needle))
+        return false;
     }
     return true;
   };
@@ -117,8 +117,19 @@ export async function myWork(db: Db, user: AuthUser, query: Query): Promise<Work
     }
   };
   const dir = query.dir === 'asc' ? 1 : -1;
-  const items = all
-    .filter(keep)
+  const shown = all.filter(keep);
+
+  // The latest document each step is about, so it opens straight from the dashboard (D27)
+  const orderIds = [...new Set(shown.map((r) => r.order_id))];
+  const [ctxs, docs] = await Promise.all([
+    Promise.all(orderIds.map((id) => loadCtx(db, id))),
+    orderIds.length
+      ? db.select().from(documents).where(inArray(documents.orderId, orderIds))
+      : Promise.resolve([]),
+  ]);
+  const ctxOf = new Map(ctxs.map((c) => [c.order.id, c]));
+
+  const items = shown
     .sort((a, b) => {
       const x = value(a);
       const y = value(b);
@@ -132,9 +143,8 @@ export async function myWork(db: Db, user: AuthUser, query: Query): Promise<Work
       return {
         taskId: r.task_id,
         orderId: r.order_id,
-        orderNumber: r.number,
+        orderRef: r.ref,
         buyerName: r.buyer_name,
-        companyName: r.company_name,
         stepKey: r.step_key,
         title:
           step.kind === 'APPROVAL_CHAIN'
@@ -156,6 +166,12 @@ export async function myWork(db: Db, user: AuthUser, query: Query): Promise<Work
         trackerA: sinceClock(r.production_started_at ? new Date(r.production_started_at) : null),
         trackerB: sinceClock(r.chain_started_at ? new Date(r.chain_started_at) : null),
         actions: actionsFromKind(step.kind, r.side),
+        documents: reviewDocsFor(
+          user,
+          ctxOf.get(r.order_id)!,
+          { id: r.task_id, stepKey: r.step_key },
+          docs.filter((d) => d.orderId === r.order_id),
+        ),
       };
     });
 
@@ -176,7 +192,6 @@ export async function myWork(db: Db, user: AuthUser, query: Query): Promise<Work
     items,
     tabs,
     buyers: uniq(all.map((r) => ({ id: r.buyer_id, name: r.buyer_name }))),
-    companies: uniq(all.map((r) => ({ id: r.company_id, name: r.company_name }))),
   };
 }
 

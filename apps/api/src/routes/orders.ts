@@ -9,9 +9,12 @@ import {
   OrderDetail,
   OrderEvent,
   OrderListQuery,
+  OrderSlotUpdate,
   OrderSummary,
   paginated,
+  RenameOrderRequest,
   ReplaceSlotPersonRequest,
+  Slot,
   TaskActionRequest,
   WorkQuery,
   WorkResponse,
@@ -26,7 +29,6 @@ import type { AuthUser } from '../auth/sessions.js';
 import type { Db } from '../db/client.js';
 import {
   buyers,
-  companies,
   componentChanges,
   documents,
   employees,
@@ -38,7 +40,14 @@ import {
 import { canSeeComponents, canSeeDoc } from '../engine/access.js';
 import { sinceClock } from '../engine/clock.js';
 import { addComponent, deleteComponent, updateComponent } from '../engine/components.js';
-import { act, cancelOrder, createOrder, replaceSlotPerson } from '../engine/engine.js';
+import {
+  act,
+  cancelOrder,
+  createOrder,
+  renameOrder,
+  replaceSlotPerson,
+  updateOrderSlot,
+} from '../engine/engine.js';
 import { componentTables, orderDetail, orderTimeline, visibleCtx } from '../engine/views.js';
 import { myWork } from '../engine/work.js';
 import { notFound } from '../errors.js';
@@ -71,7 +80,6 @@ async function listOrders(db: Db, user: AuthUser, query: z.output<typeof OrderLi
     visibleTo(user),
     query.status ? eq(orders.status, query.status) : undefined,
     query.buyerId ? eq(orders.buyerId, query.buyerId) : undefined,
-    query.companyId ? eq(orders.companyId, query.companyId) : undefined,
     query.phase ? sql`${phaseOf} = ${query.phase}` : undefined,
     query.stepKey
       ? sql`exists (select 1 from ${tasks} t where t.order_id = ${orders.id} and t.step_key = ${query.stepKey} and t.status = 'OPEN')`
@@ -79,10 +87,7 @@ async function listOrders(db: Db, user: AuthUser, query: z.output<typeof OrderLi
     query.createdFrom ? gte(orders.createdAt, new Date(query.createdFrom)) : undefined,
     query.createdTo ? lte(orders.createdAt, new Date(query.createdTo)) : undefined,
     pattern
-      ? or(
-          sql`lower(${buyers.name}) like ${pattern}`,
-          sql`'ord-' || lpad(${orders.number}::text, 4, '0') like ${pattern}`,
-        )
+      ? or(sql`lower(${buyers.name}) like ${pattern}`, sql`lower(${orders.ref}) like ${pattern}`)
       : undefined,
   );
   const SORT: Record<typeof query.sort, SQL> = {
@@ -100,10 +105,8 @@ async function listOrders(db: Db, user: AuthUser, query: z.output<typeof OrderLi
       .select({
         id: orders.id,
         number: orders.number,
+        ref: orders.ref,
         buyerName: buyers.name,
-        companyId: companies.id,
-        companyName: companies.name,
-        companyCode: companies.code,
         status: orders.status,
         phase: phaseOf,
         templateKey: orders.templateKey,
@@ -116,7 +119,6 @@ async function listOrders(db: Db, user: AuthUser, query: z.output<typeof OrderLi
       })
       .from(orders)
       .innerJoin(buyers, eq(buyers.id, orders.buyerId))
-      .innerJoin(companies, eq(companies.id, orders.companyId))
       .where(where)
       .orderBy(sql`${order(SORT[query.sort])} nulls last`, order(orders.id))
       .limit(query.pageSize)
@@ -152,8 +154,8 @@ async function listOrders(db: Db, user: AuthUser, query: z.output<typeof OrderLi
       return {
         id: r.id,
         number: r.number,
+        ref: r.ref,
         buyerName: r.buyerName,
-        company: { id: r.companyId, name: r.companyName, code: r.companyCode },
         status: r.status,
         phase: Number(r.phase),
         current,
@@ -228,6 +230,36 @@ export const orderRoutes: FastifyPluginAsyncZod<RouteDeps & { storage: StorageSe
     { schema: { params: IdParam, body: CancelOrderRequest } },
     async (request, reply) => {
       await cancelOrder(db, currentUser(request), request.params.id, request.body.reason);
+      return reply.code(204).send();
+    },
+  );
+
+  // The Creator renames the order to match the PI (D27); the change is in the history
+  app.put(
+    '/v1/orders/:id/ref',
+    { schema: { params: IdParam, body: RenameOrderRequest } },
+    async (request, reply) => {
+      await renameOrder(db, currentUser(request), request.params.id, request.body.ref);
+      return reply.code(204).send();
+    },
+  );
+
+  // Marketing changes an approval stage of this order before it starts (D27)
+  app.put(
+    '/v1/orders/:id/slots/:slot',
+    {
+      schema: {
+        params: z.object({ id: z.uuid(), slot: Slot }),
+        body: OrderSlotUpdate,
+      },
+    },
+    async (request, reply) => {
+      const user = currentUser(request);
+      await updateOrderSlot(db, user, request.params.id, request.params.slot, request.body);
+      request.log.info(
+        { orderId: request.params.id, actorId: user.id, slot: request.params.slot },
+        'order slot changed',
+      );
       return reply.code(204).send();
     },
   );

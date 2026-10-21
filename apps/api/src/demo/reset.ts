@@ -20,9 +20,8 @@ const WIPED = [
   'order_slot_gates',
   'uploads',
   'buyers',
-  'companies',
-  'company_slot_people',
-  'company_slot_gates',
+  'buyer_slot_people',
+  'buyer_slot_gates',
 ] as const;
 
 export interface ResetPlan {
@@ -94,7 +93,7 @@ export async function planReset(db: DbOrTx, keepEmails: string[]): Promise<Reset
 
 /**
  * The pre-go-live test-data wipe (D21, v2): deletes every order with its tasks, history and
- * stored files, every buyer and company, and every employee except `keepEmails` (who must be
+ * stored files, every buyer, and every employee except `keepEmails` (who must be
  * Admins, and keep their teams and capabilities).
  *
  * Never part of the app: it runs only from the `reset:data` CLI, on the owner's request,

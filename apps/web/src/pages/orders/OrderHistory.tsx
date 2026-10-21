@@ -13,9 +13,9 @@ import {
 } from '@docflow/shared';
 import { useQuery } from '@tanstack/react-query';
 import { Paperclip } from 'lucide-react';
-import { toast } from 'sonner';
 import { ErrorState, ListSkeleton } from '@/components/States';
-import { api, errorMessage } from '@/lib/api';
+import { api } from '@/lib/api';
+import { openDocument } from '@/lib/documents';
 import { formatDateTime } from '@/lib/format';
 
 const roleLabel = (as: string | null) => {
@@ -26,15 +26,6 @@ const roleLabel = (as: string | null) => {
   return as;
 };
 
-async function openDocument(id: string) {
-  try {
-    const link = await api.documents.fileLink(id, 'view');
-    window.open(link.url, '_blank', 'noopener');
-  } catch (err) {
-    toast.error(errorMessage(err));
-  }
-}
-
 /** One readable sentence per tracked event (actor, role, time and comment shown alongside) */
 function sentence(e: OrderEvent, step: string, product: string | null): string {
   const what = product ? `${step} · ${product}` : step;
@@ -42,7 +33,7 @@ function sentence(e: OrderEvent, step: string, product: string | null): string {
   const channel = d.channel ? CHANNEL_LABEL[d.channel as Channel] : null;
   switch (e.type) {
     case 'ORDER_CREATED':
-      return `Created the order for ${String(d.buyer)} (${String(d.company)})`;
+      return `Created the order for ${String(d.buyer)}`;
     case 'STEP_OPENED':
       return `${what} opened${d.holder ? `, with ${String(d.holder)}` : ''}${Number(d.run) > 1 ? ` (run ${String(d.run)})` : ''}`;
     case 'SUBMITTED':
@@ -70,13 +61,19 @@ function sentence(e: OrderEvent, step: string, product: string | null): string {
     case 'CLOSED':
       return 'Confirmed the buyer received the goods';
     case 'GATE_PASSED':
-      return `${what}: every component delivered`;
+      return `${what}: every component ready for Production`;
     case 'STATUS_CHANGED':
       return d.status === 'DONE' ? 'Order done' : 'Order: No Action Needed';
     case 'CANCELLED':
       return 'Cancelled the order';
     case 'SLOT_PERSON_REPLACED':
       return `Replaced a named person (${SLOT_INFO[d.slot as keyof typeof SLOT_INFO]?.label ?? String(d.slot)})`;
+    case 'SLOT_CHANGED': {
+      const gate = d.gate === 'ANY' ? 'any one is enough' : 'all must approve';
+      return `Changed ${SLOT_INFO[d.slot as keyof typeof SLOT_INFO]?.label ?? String(d.slot)} for this order (${gate})`;
+    }
+    case 'ORDER_RENAMED':
+      return `Changed the order number from ${String(d.from)} to ${String(d.to)}`;
     case 'COMPONENT_ADDED':
       return `Added ${String(d.component)} to ${String(d.product)}`;
     case 'COMPONENT_UPDATED':
@@ -136,7 +133,7 @@ export function OrderHistory({ order, template }: { order: OrderDetail; template
                       <button
                         type="button"
                         className="text-primary inline-flex items-center gap-1 hover:underline"
-                        onClick={() => void openDocument(d.id)}
+                        onClick={() => void openDocument(d.id, 'view')}
                       >
                         <Paperclip className="size-3.5" aria-hidden />
                         {DOC_KIND_LABEL[d.kind]}: {d.fileName}

@@ -1,9 +1,16 @@
-import { DOC_KIND_LABEL, findTemplate, SLOT_INFO, type OrderDetail } from '@docflow/shared';
+import {
+  DOC_KIND_LABEL,
+  findTemplate,
+  SLOT_INFO,
+  type OrderDetail,
+  type Slot,
+} from '@docflow/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Download, Eye } from 'lucide-react';
+import { ArrowLeft, Pencil } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useParams, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
+import { DocumentButtons } from '@/components/DocumentButtons';
 import { FormError } from '@/components/forms';
 import { PageBody, PageHeader } from '@/components/PageHeader';
 import { ErrorState, ListSkeleton } from '@/components/States';
@@ -21,24 +28,15 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { api, errorMessage } from '@/lib/api';
 import { formatAmount, formatDateTime, formatFileSize } from '@/lib/format';
-import { clockText, ORDER_TONE, orderRef, orderStatusLabel, PHASE_LABEL } from '@/lib/labels';
+import { clockText, ORDER_TONE, orderStatusLabel, PHASE_LABEL } from '@/lib/labels';
 import { cn } from '@/lib/utils';
 import { ChainView } from './ChainView';
 import { ComponentTablesView } from './ComponentTablesView';
+import { ChangeSlotDialog, RenameOrderDialog } from './OrderEditDialogs';
 import { OrderHistory } from './OrderHistory';
 import { TaskActionCard } from './TaskActionCard';
 
 type Tab = 'chain' | 'materials' | 'history' | 'details';
-
-async function openDocument(id: string, mode: 'view' | 'download') {
-  try {
-    const link = await api.documents.fileLink(id, mode);
-    if (mode === 'view') window.open(link.url, '_blank', 'noopener');
-    else window.location.assign(link.url);
-  } catch (err) {
-    toast.error(errorMessage(err));
-  }
-}
 
 function CancelDialog({
   order,
@@ -54,7 +52,7 @@ function CancelDialog({
   const cancel = useMutation({
     mutationFn: () => api.orders.cancel(order.id, reason),
     onSuccess: () => {
-      toast.success(`${orderRef(order.number)} cancelled`);
+      toast.success(`${order.ref} cancelled`);
       queryClient.invalidateQueries({ queryKey: ['order', order.id] });
       queryClient.invalidateQueries({ queryKey: ['work'] });
       queryClient.invalidateQueries({ queryKey: ['orders'] });
@@ -65,7 +63,7 @@ function CancelDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Cancel {orderRef(order.number)}?</DialogTitle>
+          <DialogTitle>Cancel {order.ref}?</DialogTitle>
           <DialogDescription>
             Every open step stops. The order and its history stay readable.
           </DialogDescription>
@@ -101,23 +99,43 @@ function CancelDialog({
 
 function Details({ order }: { order: OrderDetail }) {
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [changing, setChanging] = useState<Slot | null>(null);
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <section className="bg-card rounded-xl border p-4 sm:p-5" aria-labelledby="named-people">
-        <h3 id="named-people" className="mb-3 text-sm font-semibold">
-          Named people
+        <h3 id="named-people" className="mb-1 text-sm font-semibold">
+          Chain for this order
         </h3>
-        <dl className="grid grid-cols-[minmax(0,10rem)_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px]">
+        {order.editableSlots.length > 0 && (
+          <p className="text-muted-foreground mb-3 text-xs">
+            You can change an approval until it starts. Changes apply to this order only.
+          </p>
+        )}
+        <dl className="mt-2 grid grid-cols-[minmax(0,10rem)_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px]">
           {order.slots.map((s) => (
             <div key={s.slot} className="contents">
               <dt className="text-muted-foreground">{SLOT_INFO[s.slot].label}</dt>
-              <dd>
-                {s.people.map((p) => p.name).join(', ') || '—'}
-                {s.gate && s.people.length > 1 && (
-                  <span className="text-muted-foreground">
-                    {' '}
-                    · {s.gate === 'ALL' ? 'all must approve' : 'any one is enough'}
-                  </span>
+              <dd className="flex min-w-0 flex-wrap items-start justify-between gap-x-2">
+                <span className="min-w-0">
+                  {s.people.map((p) => p.name).join(', ') || '—'}
+                  {s.gate && s.people.length > 1 && (
+                    <span className="text-muted-foreground">
+                      {' '}
+                      · {s.gate === 'ALL' ? 'all must approve' : 'any one is enough'}
+                    </span>
+                  )}
+                </span>
+                {order.editableSlots.includes(s.slot) && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="-my-1 h-7 px-2"
+                    aria-label={`Change ${SLOT_INFO[s.slot].label}`}
+                    onClick={() => setChanging(s.slot)}
+                  >
+                    <Pencil aria-hidden /> Change
+                  </Button>
                 )}
               </dd>
             </div>
@@ -142,24 +160,7 @@ function Details({ order }: { order: OrderDetail }) {
                     {formatDateTime(d.uploadedAt)}
                   </span>
                 </span>
-                <span className="flex gap-1">
-                  {(d.fileMime === 'application/pdf' || d.fileMime.startsWith('image/')) && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => void openDocument(d.id, 'view')}
-                    >
-                      <Eye aria-hidden /> View
-                    </Button>
-                  )}
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => void openDocument(d.id, 'download')}
-                  >
-                    <Download aria-hidden /> Download
-                  </Button>
-                </span>
+                <DocumentButtons doc={d} />
               </li>
             ))}
           </ul>
@@ -191,6 +192,20 @@ function Details({ order }: { order: OrderDetail }) {
           About this order
         </h3>
         <dl className="grid grid-cols-[minmax(0,10rem)_minmax(0,1fr)] gap-x-3 gap-y-2 text-[13px]">
+          <dt className="text-muted-foreground">Order number</dt>
+          <dd className="flex flex-wrap items-start justify-between gap-x-2">
+            <span className="font-medium">{order.ref}</span>
+            {order.canRename && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="-my-1 h-7 px-2"
+                onClick={() => setRenameOpen(true)}
+              >
+                <Pencil aria-hidden /> Change
+              </Button>
+            )}
+          </dd>
           <dt className="text-muted-foreground">Created</dt>
           <dd>
             {formatDateTime(order.createdAt)} by {order.createdByName}
@@ -213,6 +228,12 @@ function Details({ order }: { order: OrderDetail }) {
         )}
       </section>
       <CancelDialog order={order} open={cancelOpen} onOpenChange={setCancelOpen} />
+      {renameOpen && (
+        <RenameOrderDialog order={order} open={renameOpen} onOpenChange={setRenameOpen} />
+      )}
+      {changing && (
+        <ChangeSlotDialog order={order} slot={changing} onClose={() => setChanging(null)} />
+      )}
     </div>
   );
 }
@@ -266,8 +287,8 @@ export function OrderPage() {
   return (
     <>
       <PageHeader
-        title={`${orderRef(o.number)} · ${o.buyerName}`}
-        description={`${o.company.name} · ${o.status === 'ACTIVE' ? PHASE_LABEL[o.phase] : orderStatusLabel(o.status)}`}
+        title={`${o.ref} · ${o.buyerName}`}
+        description={o.status === 'ACTIVE' ? PHASE_LABEL[o.phase] : orderStatusLabel(o.status)}
         actions={
           <Button asChild variant="outline">
             <Link to="/orders">

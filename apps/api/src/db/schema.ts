@@ -129,60 +129,13 @@ export const passwordTokens = pgTable(
 
 // ---- Masters ----------------------------------------------------------------
 
-export const companies = pgTable(
-  'companies',
-  {
-    id: id(),
-    name: text('name').notNull(),
-    // Optional short code, stored uppercase
-    code: text('code'),
-    isActive: boolean('is_active').notNull().default(true),
-    createdAt: createdAt(),
-    updatedAt: updatedAt(),
-  },
-  (t) => [
-    uniqueIndex('companies_name_lower_unique').on(sql`lower(${t.name})`),
-    uniqueIndex('companies_code_unique').on(t.code),
-  ],
-);
-
-/** Who fills each named slot for a company's orders (Q60), in order. */
-export const companySlotPeople = pgTable(
-  'company_slot_people',
-  {
-    companyId: uuid('company_id')
-      .notNull()
-      .references(() => companies.id, { onDelete: 'cascade' }),
-    slot: slotEnum('slot').notNull(),
-    employeeId: uuid('employee_id')
-      .notNull()
-      .references(() => employees.id),
-    ordinal: integer('ordinal').notNull(),
-  },
-  (t) => [
-    primaryKey({ columns: [t.companyId, t.slot, t.employeeId] }),
-    index('company_slot_people_employee_idx').on(t.employeeId),
-  ],
-);
-
-/** ALL/ANY per approval slot, per company. Missing = ALL. */
-export const companySlotGates = pgTable(
-  'company_slot_gates',
-  {
-    companyId: uuid('company_id')
-      .notNull()
-      .references(() => companies.id, { onDelete: 'cascade' }),
-    slot: slotEnum('slot').notNull(),
-    gate: gateEnum('gate').notNull(),
-  },
-  (t) => [primaryKey({ columns: [t.companyId, t.slot] })],
-);
-
 export const buyers = pgTable(
   'buyers',
   {
     id: id(),
     name: text('name').notNull(),
+    // Optional short code, stored uppercase
+    code: text('code'),
     country: text('country'),
     address: text('address'),
     contact: text('contact'),
@@ -190,7 +143,42 @@ export const buyers = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [uniqueIndex('buyers_name_lower_unique').on(sql`lower(${t.name})`)],
+  (t) => [
+    uniqueIndex('buyers_name_lower_unique').on(sql`lower(${t.name})`),
+    uniqueIndex('buyers_code_unique').on(t.code),
+  ],
+);
+
+/** Who fills each named slot on a buyer's orders (Q60, D27), in order. */
+export const buyerSlotPeople = pgTable(
+  'buyer_slot_people',
+  {
+    buyerId: uuid('buyer_id')
+      .notNull()
+      .references(() => buyers.id, { onDelete: 'cascade' }),
+    slot: slotEnum('slot').notNull(),
+    employeeId: uuid('employee_id')
+      .notNull()
+      .references(() => employees.id),
+    ordinal: integer('ordinal').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.buyerId, t.slot, t.employeeId] }),
+    index('buyer_slot_people_employee_idx').on(t.employeeId),
+  ],
+);
+
+/** ALL/ANY per approval slot, per buyer. Missing = ALL. */
+export const buyerSlotGates = pgTable(
+  'buyer_slot_gates',
+  {
+    buyerId: uuid('buyer_id')
+      .notNull()
+      .references(() => buyers.id, { onDelete: 'cascade' }),
+    slot: slotEnum('slot').notNull(),
+    gate: gateEnum('gate').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.buyerId, t.slot] })],
 );
 
 /** A presigned upload, before it is attached to an order as a document. */
@@ -228,14 +216,13 @@ export const orders = pgTable(
   'orders',
   {
     id: id(),
-    // Human reference, e.g. ORD-0007
+    // Running sequence; gives the first order number, ORD-0007
     number: integer('number').generatedAlwaysAsIdentity().notNull(),
+    // The order number people use; the Creator can change it to the PI's (D27)
+    ref: text('ref').notNull(),
     buyerId: uuid('buyer_id')
       .notNull()
       .references(() => buyers.id),
-    companyId: uuid('company_id')
-      .notNull()
-      .references(() => companies.id),
     // Pinned workflow template; editing a template never changes this order (D24)
     templateKey: text('template_key').notNull(),
     templateVersion: integer('template_version').notNull(),
@@ -255,13 +242,13 @@ export const orders = pgTable(
   },
   (t) => [
     uniqueIndex('orders_number_unique').on(t.number),
+    uniqueIndex('orders_ref_lower_unique').on(sql`lower(${t.ref})`),
     index('orders_buyer_idx').on(t.buyerId),
-    index('orders_company_idx').on(t.companyId),
     index('orders_status_idx').on(t.status),
   ],
 );
 
-/** The named people on this order, copied from the company at creation (Q61) */
+/** The named people on this order, copied from the buyer at creation (Q61, D27) */
 export const orderSlotPeople = pgTable(
   'order_slot_people',
   {

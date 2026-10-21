@@ -3,8 +3,7 @@ import type { Db } from '../db/client.js';
 import {
   approvalVotes,
   buyers,
-  companies,
-  companySlotPeople,
+  buyerSlotPeople,
   componentChanges,
   documents,
   employees,
@@ -68,15 +67,15 @@ export async function deleteEmployee(
     throw hasHistory(`${employee.name} is part of at least one order.`);
 
   const named = await db
-    .selectDistinct({ name: companies.name })
-    .from(companySlotPeople)
-    .innerJoin(companies, eq(companies.id, companySlotPeople.companyId))
-    .where(eq(companySlotPeople.employeeId, id));
+    .selectDistinct({ name: buyers.name })
+    .from(buyerSlotPeople)
+    .innerJoin(buyers, eq(buyers.id, buyerSlotPeople.buyerId))
+    .where(eq(buyerSlotPeople.employeeId, id));
   if (named.length > 0) {
     throw conflict(
       'EMPLOYEE_NAMED',
-      `${employee.name} is named in ${named.map((c) => c.name).join(', ')}. Change those companies first.`,
-      { companies: named },
+      `${employee.name} is named in ${named.map((c) => c.name).join(', ')}. Change those buyers first.`,
+      { buyers: named },
     );
   }
 
@@ -93,19 +92,6 @@ export async function deleteEmployee(
     await tx.delete(employees).where(eq(employees.id, id));
   });
   await Promise.allSettled(leftovers.map((u) => storage.delete(u.key)));
-}
-
-export async function deleteCompany(db: Db, id: string): Promise<void> {
-  const [company] = await db
-    .select({ name: companies.name })
-    .from(companies)
-    .where(eq(companies.id, id));
-  if (!company) throw notFound('Company');
-  if (await countOf(db.select({ n: count() }).from(orders).where(eq(orders.companyId, id)))) {
-    throw hasHistory(`Orders exist for ${company.name}.`);
-  }
-  // Its named people and gates go with it (ON DELETE CASCADE)
-  await db.delete(companies).where(eq(companies.id, id));
 }
 
 export async function deleteBuyer(db: Db, id: string): Promise<void> {

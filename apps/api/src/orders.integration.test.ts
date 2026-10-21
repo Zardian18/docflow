@@ -97,10 +97,7 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
     expect(res.statusCode, res.body).toBe(204);
   };
 
-  it('Admin sets up a company with named people and ALL/ANY gates; slot rules are enforced', async () => {
-    const buyer = await as.admin!.post('/v1/buyers', { name: 'Acme Imports', country: 'UAE' });
-    expect(buyer.statusCode, buyer.body).toBe(201);
-    ids.buyer = buyer.json().id;
+  it('Admin sets up a buyer with its default chain and ALL/ANY gates; slot rules are enforced', async () => {
     const slots = [
       { slot: 'MARKETING', employeeIds: [ids.mkt] },
       { slot: 'CREATOR', employeeIds: [ids.creator] },
@@ -112,7 +109,7 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
       { slot: 'BOL_HEAD', employeeIds: [ids.head1, ids.head2], gate: 'ALL' },
     ];
     // Each named person must hold the slot's capability (several roles are fine, D26)
-    const bad = await as.admin!.post('/v1/companies', {
+    const bad = await as.admin!.post('/v1/buyers', {
       name: 'Bad Co',
       slots: slots.map((s) =>
         s.slot === 'PI_APPROVER' ? { ...s, employeeIds: [ids.creator] } : s,
@@ -120,23 +117,35 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
     });
     expect(bad.statusCode).toBe(400);
     expect(bad.json().details.slots.PI_APPROVER).toMatch(/able to be PI Approver/);
-    const company = await as.admin!.post('/v1/companies', {
-      name: 'Microtech',
-      code: 'mic',
+    const buyer = await as.admin!.post('/v1/buyers', {
+      name: 'Acme Imports',
+      code: 'acm',
+      country: 'UAE',
       slots,
     });
-    expect(company.statusCode, company.body).toBe(201);
-    ids.company = company.json().id;
+    expect(buyer.statusCode, buyer.body).toBe(201);
+    expect(buyer.json()).toMatchObject({ code: 'ACM' });
+    ids.buyer = buyer.json().id;
+    // Marketing keeps buyer details up to date but can't set the default chain (D27)
+    expect(
+      (await as.mkt!.put(`/v1/buyers/${ids.buyer}`, { name: 'Acme Imports', slots })).statusCode,
+    ).toBe(403);
+    const renamed = await as.mkt!.put(`/v1/buyers/${ids.buyer}`, {
+      name: 'Acme Imports',
+      code: 'ACM',
+      country: 'United Arab Emirates',
+    });
+    expect(renamed.statusCode, renamed.body).toBe(200);
+    // Saved without `slots`, the chain stays as Admin set it
+    expect(renamed.json().slots.find((s: { slot: string }) => s.slot === 'PAY_HEAD')).toMatchObject(
+      { gate: 'ANY', people: [{ id: ids.head1 }, { id: ids.head2 }] },
+    );
   });
 
   it('only Marketing creates orders; the order starts with the CBM loop at the Creator', async () => {
-    expect(
-      (await as.admin!.post('/v1/orders', { buyerId: ids.buyer, companyId: ids.company }))
-        .statusCode,
-    ).toBe(403);
+    expect((await as.admin!.post('/v1/orders', { buyerId: ids.buyer })).statusCode).toBe(403);
     const res = await as.mkt!.post('/v1/orders', {
       buyerId: ids.buyer,
-      companyId: ids.company,
       notes: '2 products',
     });
     expect(res.statusCode, res.body).toBe(201);
@@ -329,13 +338,7 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
     expect(d.rounds.filter((r) => r.channel === 'ANNEXURE').length).toBe(3);
   });
 
-  it('the component tables gate Production QA: every component of every product delivered', async () => {
-    for (const product of ['Prod A', 'Prod B']) {
-      await ok('mat', (await task('raw_material', product)).id, { action: 'COMPLETE' });
-      await ok('mat', (await task('packaging', product)).id, { action: 'COMPLETE' });
-    }
-    const gate = await task('materials_delivered');
-    expect(gate).toMatchObject({ status: 'OPEN', holder: null });
+  it('Materials lists components first, orders only what is listed, and hands over only when complete (D27)', async () => {
     const d = await detail();
     const [a, b] = d.products;
     // Only Materials edits
@@ -344,49 +347,93 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
       kind: 'PACKAGING',
     });
     expect(denied.statusCode).toBe(403);
-    const add = (productId: string, name: string, kind: string) =>
-      as.mat!.post(`/v1/orders/${orderId}/products/${productId}/components`, {
+    // Components can be listed with nothing but a name and a type, before anything is ordered
+    const add = async (productId: string, name: string, kind: string) => {
+      const res = await as.mat!.post(`/v1/orders/${orderId}/products/${productId}/components`, {
         name,
         kind,
-        poQuantity: '5,000',
-        poDate: '2026-10-01',
       });
-    const c1 = (await add(a!.id, 'Carton', 'PACKAGING')).json().id;
-    const c2 = (await add(a!.id, 'API', 'RAW_MATERIAL')).json().id;
-    const c3 = (await add(b!.id, 'Label', 'PACKAGING')).json().id;
+      expect(res.statusCode, res.body).toBe(201);
+      return res.json().id as string;
+    };
+    const c1 = await add(a!.id, 'Carton', 'PACKAGING');
+    const c2 = await add(a!.id, 'API', 'RAW_MATERIAL');
+    const c3 = await add(b!.id, 'Label', 'PACKAGING');
+    let tables = (await as.mat!.get(`/v1/orders/${orderId}/components`)).json();
+    expect(tables.products[0].components[0]).toMatchObject({
+      name: 'Carton',
+      status: 'NOT_ORDERED',
+      orderingDays: { days: 0, running: true },
+      deliveryDays: null,
+      missing: ['poDate', 'dispatchDate', 'deliverDate', 'challanNo', 'lrDetails'],
+    });
+
+    // "Ordered" needs at least one component of that type for the product
+    await ok('mat', (await task('raw_material', 'Prod A')).id, { action: 'COMPLETE' });
+    const refused = await act('mat', (await task('raw_material', 'Prod B')).id, {
+      action: 'COMPLETE',
+    });
+    expect(refused.json()).toMatchObject({
+      error: 'COMPONENTS_REQUIRED',
+      details: { kind: 'RAW_MATERIAL' },
+    });
+    const c4 = await add(b!.id, 'Starch', 'RAW_MATERIAL');
+    await ok('mat', (await task('raw_material', 'Prod B')).id, { action: 'COMPLETE' });
+    for (const product of ['Prod A', 'Prod B']) {
+      await ok('mat', (await task('packaging', product)).id, { action: 'COMPLETE' });
+    }
+    const gate = await task('materials_delivered');
+    expect(gate).toMatchObject({ status: 'OPEN', holder: null, title: 'Materials complete' });
+
     const today = new Date().toISOString().slice(0, 10);
-    for (const id of [c1, c2]) {
-      expect(
-        (
-          await as.mat!.put(`/v1/components/${id}`, {
-            name: id === c1 ? 'Carton' : 'API',
-            kind: id === c1 ? 'PACKAGING' : 'RAW_MATERIAL',
-            deliverDate: today,
-            tnsRemark: '2% extra',
-          })
-        ).statusCode,
-      ).toBe(204);
+    const parts: Array<[string, string, string]> = [
+      [c1, 'Carton', 'PACKAGING'],
+      [c2, 'API', 'RAW_MATERIAL'],
+      [c3, 'Label', 'PACKAGING'],
+      [c4, 'Starch', 'RAW_MATERIAL'],
+    ];
+    // Delivered but without the dispatch date, Challan No. and LR Details: no hand-over yet
+    for (const [id, name, kind] of parts) {
+      const res = await as.mat!.put(`/v1/components/${id}`, {
+        name,
+        kind,
+        poDate: today,
+        deliverDate: today,
+        tnsRemark: '2% extra',
+      });
+      expect(res.statusCode, res.body).toBe(204);
     }
     expect((await task('materials_delivered')).status).toBe('OPEN');
-    await as.mat!.put(`/v1/components/${c3}`, {
-      name: 'Label',
-      kind: 'PACKAGING',
-      deliverDate: today,
-      comment: 'Arrived today',
+    tables = (await as.mat!.get(`/v1/orders/${orderId}/components`)).json();
+    expect(tables.products[0].components[0]).toMatchObject({
+      status: 'DELIVERED',
+      orderingDays: { days: 0, running: false },
+      deliveryDays: { days: 0, running: false },
+      missing: ['dispatchDate', 'challanNo', 'lrDetails'],
     });
-    expect((await task('materials_delivered')).status).toBe('DONE');
+    // Everything filled in on the last one hands the order to Production; remarks stay optional
+    for (const [index, [id, name, kind]] of parts.entries()) {
+      await as.mat!.put(`/v1/components/${id}`, {
+        name,
+        kind,
+        poDate: today,
+        dispatchDate: today,
+        deliverDate: today,
+        challanNo: `CH-${index}`,
+        lrDetails: `LR-${index}`,
+        comment: index === parts.length - 1 ? 'Arrived today' : null,
+      });
+      expect((await task('materials_delivered')).status).toBe(
+        index === parts.length - 1 ? 'DONE' : 'OPEN',
+      );
+    }
     expect((await task('production_qa')).holder?.team).toBe('PRODUCTION');
-    const history = (await as.reg!.get(`/v1/components/${c3}/history`)).json();
-    expect(history[0]).toMatchObject({
-      field: 'deliverDate',
-      newValue: today,
-      comment: 'Arrived today',
-      actorName: 'mat',
-    });
-    const tables = (await as.prod!.get(`/v1/orders/${orderId}/components`)).json();
+    const history = (await as.reg!.get(`/v1/components/${c4}/history`)).json();
+    expect(history[0]).toMatchObject({ comment: 'Arrived today', actorName: 'mat' });
+    tables = (await as.prod!.get(`/v1/orders/${orderId}/components`)).json();
     expect(
       tables.products.map((p: { delivered: number; total: number }) => `${p.delivered}/${p.total}`),
-    ).toEqual(['2/2', '1/1']);
+    ).toEqual(['2/2', '2/2']);
   });
 
   it('Production QA returns work to Materials, then hands over to Logistics; edits close after', async () => {
@@ -556,9 +603,8 @@ describe.skipIf(!TEST_DB_URL)('one person, several roles on one order', () => {
 
   it('Marketing, Creator, Approver and Head Approver: each stage needs its own action', async () => {
     const admin = await new Client(app).login('admin@t.co');
-    const buyer = (await admin.post('/v1/buyers', { name: 'Acme', country: 'UAE' })).json();
     const all = [soloId];
-    const company = await admin.post('/v1/companies', {
+    const buyer = await admin.post('/v1/buyers', {
       name: 'Solo Co',
       slots: [
         'MARKETING',
@@ -571,11 +617,8 @@ describe.skipIf(!TEST_DB_URL)('one person, several roles on one order', () => {
         'BOL_HEAD',
       ].map((slot) => ({ slot, employeeIds: all })),
     });
-    expect(company.statusCode, company.body).toBe(201);
-    const created = await solo.post('/v1/orders', {
-      buyerId: buyer.id,
-      companyId: company.json().id,
-    });
+    expect(buyer.statusCode, buyer.body).toBe(201);
+    const created = await solo.post('/v1/orders', { buyerId: buyer.json().id });
     expect(created.statusCode, created.body).toBe(201);
     const orderId = created.json().id as string;
     const task = async (stepKey: string) =>

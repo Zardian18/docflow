@@ -25,15 +25,12 @@ async function upload(page: Page, scope: ReturnType<Page['locator']>, name: stri
 test('Phase 1 in the browser: order, CBM loop, PI with both versions, approvals, advance', async ({
   browser,
 }) => {
-  // Marketing creates the order; the company's named people are filled in
+  // Marketing creates the order; the buyer's default chain is filled in (D27)
   const rohan = await as(browser, 'rohan', '/orders/new');
   const consoleWatch = watchConsole(rohan.page);
   await rohan.page.getByRole('combobox', { name: /^Buyer:/ }).click();
   await rohan.page.getByPlaceholder('Search buyers').fill('Andes');
   await rohan.page.getByRole('option', { name: /Andes Pharma/ }).click();
-  await rohan.page.getByRole('combobox', { name: /^Company:/ }).click();
-  await rohan.page.getByPlaceholder('Search companies').fill('Trident Pharma');
-  await rohan.page.getByRole('option', { name: /Trident Pharma Exports/ }).click();
   await expect(rohan.page.getByRole('combobox', { name: 'Creator: Sara Khan' })).toBeVisible();
   await expectAccessible(rohan.page, 'new order');
   await rohan.page.getByRole('button', { name: 'Create order' }).click();
@@ -52,7 +49,10 @@ test('Phase 1 in the browser: order, CBM loop, PI with both versions, approvals,
 
   await rohan.page.reload();
   c = card(rohan.page, /^CBM/);
-  await c.getByRole('radio', { name: 'Send back with comments' }).click();
+  // The latest CBM is right on the step, and each button acts straight away (D27)
+  await expect(c.getByRole('button', { name: 'View CBM' })).toBeVisible();
+  await expect(c.getByRole('button', { name: 'Download CBM' })).toBeVisible();
+  await expect(c.getByRole('button', { name: 'Confirm CBM' })).toHaveCount(1);
   await c.getByRole('button', { name: 'Send back with comments' }).click();
   await expect(c.getByRole('alert')).toContainText('Say what needs changing');
   await c.getByLabel(/Comments/).fill('Use 40ft containers');
@@ -88,8 +88,12 @@ test('Phase 1 in the browser: order, CBM loop, PI with both versions, approvals,
   await c
     .getByLabel('Products on this order, one per line')
     .fill('Paracetamol 500mg Tablets\nORS Sachets');
+  // The Creator is asked to change the order number to the PI's
+  await expect(c.getByText(/match the PI number/)).toBeVisible();
+  await c.getByLabel('Order number').fill('TPE/PI/26-27/0100');
   await c.getByRole('button', { name: 'Submit PI for approval' }).click();
   await expect(sara.page.getByText('With Marketing: Rohan Kapoor')).toBeVisible();
+  await expect(sara.page.getByRole('heading', { name: /TPE\/PI\/26-27\/0100/ })).toBeVisible();
 
   // Marketing → Approver → Head Approver
   for (const who of ['rohan', 'priya', 'vikram'] as const) {

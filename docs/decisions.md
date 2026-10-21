@@ -341,3 +341,20 @@ How to restore: `docs/runbook-backup.md`.
 - **Several slots on one order:** the same person may fill several named slots of one order or company, including in the same approval chain, and the Creator may also be Marketing, Approver or Head Approver.
 - **Only as different roles:** each slot is acted on separately. Someone who is both PI Approver and PI Head Approver approves once at the Approver stage and again at the Head stage, and the history shows which role each action was taken in. They still need the capability for each slot.
 - **Still refused:** a slot left empty when an order starts, two people in a one-person slot (Marketing, Creator), and the same person listed twice in one slot.
+
+### D27 — The owner's 11 changes after the v2 launch (owner, 20 Oct 2026)
+**Status: DECIDED.** Built on top of D24–D26. New orders use workflow template **v2**; orders created before keep v1 (invariant 1).
+- **Buyer = company.** The separate Company master is gone. Each buyer has its own **default chain** (named people and ALL/ANY per approval), and only Admin sets it. Marketing keeps the buyer's details (name, code, country, address, contact) up to date but can't change its chain. An order picks only a buyer.
+- **Changing the chain for one order.** The order's Marketing person (and Admin) can change an approval stage's people and ALL/ANY for that order only, when creating it and later until that stage starts. Approvers choose nothing. The buyer's default stays as it is, and every change is in the order's history.
+- **Order number.** New orders start as ORD-0001, ORD-0002… When submitting the PI, the Creator is prompted to change it to the PI number. The Creator, the order's Marketing person and Admin can change it later. Numbers are unique (case-insensitive), and every change is in the history.
+- **Materials table:**
+  - Materials can list every component of a product with just a name and type, before anything is ordered.
+  - Each row shows a **Status** (Not ordered / Ordered / Dispatched / Delivered).
+  - **Ordering delay:** days from production start to the PO Date, counting until ordered, then "took N days".
+  - **Delivery time:** days from the PO Date to the Deliver Date, counting until delivered, then "took N days".
+- **"Raw material ordered" / "Packaging ordered"** are refused until that product has at least one component of that type in the table.
+- **Hand-over to Production** happens only when every component of every product has its PO Date, Dispatch Date, Deliver Date, Challan No. and LR Details. Quantities and remarks stay optional.
+- **Documents on the step.** Whoever is reviewing or approving sees the latest version of the document the step is about (CBM, PI versions they may open, annexure, artwork, invoice, payment proof, BoL), with View and Download, on the step itself and on My Work.
+- **Action buttons act directly.** One button per action: no separate selector, so there is no repeated "Confirm CBM" or "Approve". Sending back and rejecting ask for the reason in the comment box.
+- **The page never scrolls sideways.** Wide tables scroll inside their own box.
+- **Payments default to INR.**

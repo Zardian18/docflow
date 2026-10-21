@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CompanyOption, SlotInput } from './masters.js';
+import { SlotInput } from './masters.js';
 import { Gate, Slot, Team } from './people.js';
 import { Channel, DocKind, ShipmentStatus, Tag } from './template.js';
 
@@ -32,13 +32,20 @@ export type TaskStatus = z.infer<typeof TaskStatus>;
 export const Clock = z.object({ days: z.number().int().nonnegative(), since: Instant }).nullable();
 export type Clock = z.infer<typeof Clock>;
 
+/** The first order number, from the running sequence; the Creator can change it to the PI's (D27) */
 export const orderRef = (n: number) => `ORD-${String(n).padStart(4, '0')}`;
+
+export const OrderRef = z
+  .string()
+  .trim()
+  .min(1, 'Enter the order number')
+  .max(40, 'Use at most 40 characters')
+  .regex(/^[A-Za-z0-9][A-Za-z0-9 ./_-]*$/, 'Use letters, digits, spaces and . / _ - only');
 
 // ---- Creating an order (Q2: Marketing; Q61: named people may be changed for this order) ----
 
 export const OrderCreate = z.object({
   buyerId: z.uuid('Choose a buyer'),
-  companyId: z.uuid('Choose a company'),
   notes: z
     .string()
     .trim()
@@ -47,11 +54,8 @@ export const OrderCreate = z.object({
     .nullable()
     .optional()
     .default(null),
-  /** Overrides of the company's named people for this order; gates always come from the company */
-  slots: z
-    .array(SlotInput.omit({ gate: true }))
-    .max(20)
-    .default([]),
+  /** Marketing's changes to the buyer's default chain, for this order only (D27) */
+  slots: z.array(SlotInput).max(20).default([]),
 });
 export type OrderCreate = z.input<typeof OrderCreate>;
 
@@ -69,8 +73,9 @@ export type Holder = z.infer<typeof Holder>;
 export const OrderSummary = z.object({
   id: z.uuid(),
   number: z.number().int(),
+  /** The order number people use: ORD-0007 at first, or the PI's number (D27) */
+  ref: z.string(),
   buyerName: z.string(),
-  company: CompanyOption,
   status: OrderStatus,
   phase: z.number().int().min(1).max(3),
   /** Titles of the steps open right now */
@@ -96,7 +101,6 @@ export const OrderListQuery = z.object({
   status: OrderStatus.optional(),
   phase: z.coerce.number().int().min(1).max(3).optional(),
   buyerId: z.uuid().optional(),
-  companyId: z.uuid().optional(),
   stepKey: z.string().max(60).optional(),
   createdFrom: Instant.optional(),
   createdTo: Instant.optional(),
@@ -105,6 +109,14 @@ export const OrderListQuery = z.object({
   dir: z.enum(['asc', 'desc']).default('desc'),
 });
 export type OrderListQuery = z.input<typeof OrderListQuery>;
+
+export const ReviewDoc = z.object({
+  id: z.uuid(),
+  kind: DocKind,
+  fileName: z.string(),
+  fileMime: z.string(),
+});
+export type ReviewDoc = z.infer<typeof ReviewDoc>;
 
 export const TaskView = z.object({
   id: z.uuid(),
@@ -129,6 +141,8 @@ export const TaskView = z.object({
   held: Clock,
   /** What the signed-in person can do on it now */
   actions: z.array(z.string()),
+  /** The latest version of each document this step is about, that this person may open */
+  reviewDocs: z.array(ReviewDoc),
 });
 export type TaskView = z.infer<typeof TaskView>;
 
@@ -226,6 +240,10 @@ export const OrderDetail = OrderSummary.extend({
   canEditComponents: z.boolean(),
   canCancel: z.boolean(),
   canSeeComponents: z.boolean(),
+  /** The Creator (and Marketing, Admin) can change the order number (D27) */
+  canRename: z.boolean(),
+  /** Approval slots Marketing can still change for this order: their stage hasn't started */
+  editableSlots: z.array(Slot),
 });
 export type OrderDetail = z.infer<typeof OrderDetail>;
 
@@ -251,7 +269,7 @@ export const PaymentInput = z.object({
     .string()
     .trim()
     .regex(/^\d{1,12}(\.\d{1,2})?$/, 'Enter an amount, e.g. 125000.50'),
-  currency: z.string().trim().toUpperCase().length(3, 'Use a 3-letter code, e.g. USD'),
+  currency: z.string().trim().toUpperCase().length(3, 'Use a 3-letter code, e.g. INR'),
   reference: z
     .string()
     .trim()
@@ -274,6 +292,8 @@ export const TaskActionRequest = z.object({
     .default([]),
   /** The PI task: the order's products, in order */
   products: z.array(z.string().trim().min(1).max(120)).max(50).optional(),
+  /** The PI task: the order number, changed to match the PI (D27) */
+  orderRef: OrderRef.optional(),
   payment: PaymentInput.optional(),
   /** Status logs and checkpoints: when it happened (defaults to today) */
   date: LocalDate.optional(),
@@ -287,6 +307,23 @@ export const CancelOrderRequest = z.object({
   reason: z.string().trim().min(1, 'Give a reason').max(1000),
 });
 
+export const RenameOrderRequest = z.object({ ref: OrderRef });
+
+/** Marketing changes one approval slot of this order, before its stage starts (D27) */
+export const OrderSlotUpdate = z.object({
+  employeeIds: z.array(z.uuid()).min(1, 'Choose someone').max(20),
+  gate: Gate,
+  reason: z
+    .string()
+    .trim()
+    .max(1000)
+    .transform((v) => (v === '' ? null : v))
+    .nullable()
+    .optional()
+    .default(null),
+});
+export type OrderSlotUpdate = z.input<typeof OrderSlotUpdate>;
+
 export const ReplaceSlotPersonRequest = z.object({
   slot: Slot,
   fromEmployeeId: z.uuid(),
@@ -299,9 +336,8 @@ export const ReplaceSlotPersonRequest = z.object({
 export const WorkItem = z.object({
   taskId: z.uuid(),
   orderId: z.uuid(),
-  orderNumber: z.number().int(),
+  orderRef: z.string(),
   buyerName: z.string(),
-  companyName: z.string(),
   stepKey: z.string(),
   title: z.string(),
   phase: z.number().int(),
@@ -314,6 +350,8 @@ export const WorkItem = z.object({
   trackerA: Clock,
   trackerB: Clock,
   actions: z.array(z.string()),
+  /** The latest version of what this step is about, to open straight from the dashboard */
+  documents: z.array(ReviewDoc),
 });
 export type WorkItem = z.infer<typeof WorkItem>;
 
@@ -322,7 +360,6 @@ export const WorkQuery = z.object({
   /** A team, or "NAMED" for slot work; all when absent */
   tab: z.union([Team, z.literal('NAMED')]).optional(),
   buyerId: z.uuid().optional(),
-  companyId: z.uuid().optional(),
   stepKey: z.string().max(60).optional(),
   tag: Tag.optional(),
   since: Instant.optional(),
@@ -339,7 +376,6 @@ export const WorkResponse = z.object({
   /** Counts per tab, unfiltered */
   tabs: z.array(z.object({ tab: z.string(), label: z.string(), count: z.number().int() })),
   buyers: z.array(z.object({ id: z.uuid(), name: z.string() })),
-  companies: z.array(z.object({ id: z.uuid(), name: z.string() })),
 });
 export type WorkResponse = z.infer<typeof WorkResponse>;
 
@@ -383,6 +419,31 @@ const OptText = (max: number) =>
     .nullable();
 const OptDate = LocalDate.nullable();
 
+export const COMPONENT_STATUSES = ['NOT_ORDERED', 'ORDERED', 'DISPATCHED', 'DELIVERED'] as const;
+export const ComponentStatus = z.enum(COMPONENT_STATUSES);
+export type ComponentStatus = z.infer<typeof ComponentStatus>;
+export const COMPONENT_STATUS_LABEL: Record<ComponentStatus, string> = {
+  NOT_ORDERED: 'Not ordered',
+  ORDERED: 'Ordered',
+  DISPATCHED: 'Dispatched',
+  DELIVERED: 'Delivered',
+};
+
+/** What the hand-over to Production needs on every component (D27); the rest is optional */
+export const COMPONENT_REQUIRED_FIELDS = [
+  'poDate',
+  'dispatchDate',
+  'deliverDate',
+  'challanNo',
+  'lrDetails',
+] as const satisfies readonly ComponentField[];
+
+/** Calendar days between two moments; `running` while the end hasn't happened yet */
+export const DayCount = z
+  .object({ days: z.number().int().nonnegative(), running: z.boolean() })
+  .nullable();
+export type DayCount = z.infer<typeof DayCount>;
+
 export const Component = z.object({
   id: z.uuid(),
   productId: z.uuid(),
@@ -398,8 +459,13 @@ export const Component = z.object({
   challanNo: z.string().nullable(),
   tridentRemark: z.string().nullable(),
   tnsRemark: z.string().nullable(),
-  /** Days since PO Date, until delivered (C5) */
-  daysSincePo: z.number().int().nullable(),
+  status: ComponentStatus,
+  /** Production start → PO Date: still counting until ordered (D27) */
+  orderingDays: DayCount,
+  /** PO Date → Deliver Date: still counting until delivered (C5, D27) */
+  deliveryDays: DayCount,
+  /** Fields still needed before Materials can hand over to Production (D27) */
+  missing: z.array(z.enum(COMPONENT_FIELDS)),
   delivered: z.boolean(),
   updatedAt: Instant,
 });
