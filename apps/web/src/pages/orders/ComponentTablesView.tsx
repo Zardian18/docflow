@@ -304,11 +304,17 @@ function HistoryDialog({ row, onClose }: { row: Component | null; onClose: () =>
             {history.data!.map((c) => (
               <li key={c.id} className="border-b pb-2 last:border-0">
                 <b className="font-medium">
-                  {c.field in COMPONENT_FIELD_LABEL
-                    ? COMPONENT_FIELD_LABEL[c.field as keyof typeof COMPONENT_FIELD_LABEL]
-                    : c.field}
+                  {c.field === 'note'
+                    ? 'Note'
+                    : c.field in COMPONENT_FIELD_LABEL
+                      ? COMPONENT_FIELD_LABEL[c.field as keyof typeof COMPONENT_FIELD_LABEL]
+                      : c.field}
                 </b>
-                : {c.oldValue ?? '—'} → {c.newValue ?? '—'}
+                {c.field !== 'note' && (
+                  <>
+                    : {c.oldValue ?? '—'} → {c.newValue ?? '—'}
+                  </>
+                )}
                 <span className="text-muted-foreground block text-xs">
                   {c.actorName}, {formatDateTime(c.at)}
                   {c.comment && ` · “${c.comment}”`}

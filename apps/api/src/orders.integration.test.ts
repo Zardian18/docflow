@@ -471,6 +471,30 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
     const starch = tables.products[1].components.find((c: { name: string }) => c.name === 'Starch');
     expect(starch.note).toMatchObject({ text: 'Arrived today', byName: 'mat' });
     expect(tables.products[0].components[0].note).toBeNull();
+    // A note alone, with no other field changed, is kept too (it used to be dropped)
+    const carton = tables.products[0].components[0];
+    const noteOnly = await as.mat!.put(`/v1/components/${carton.id}`, {
+      name: carton.name,
+      kind: carton.kind,
+      poDate: carton.poDate,
+      dispatchDate: carton.dispatchDate,
+      deliverDate: carton.deliverDate,
+      challanNo: carton.challanNo,
+      lrDetails: carton.lrDetails,
+      tnsRemark: carton.tnsRemark,
+      comment: 'Supplier confirmed by phone',
+    });
+    expect(noteOnly.statusCode, noteOnly.body).toBe(204);
+    tables = (await as.reg!.get(`/v1/orders/${orderId}/components`)).json();
+    expect(tables.products[0].components[0].note).toMatchObject({
+      text: 'Supplier confirmed by phone',
+      byName: 'mat',
+    });
+    const cartonHistory = (await as.mat!.get(`/v1/components/${carton.id}/history`)).json();
+    expect(cartonHistory[0]).toMatchObject({
+      field: 'note',
+      comment: 'Supplier confirmed by phone',
+    });
     tables = (await as.prod!.get(`/v1/orders/${orderId}/components`)).json();
     expect(
       tables.products.map((p: { delivered: number; total: number }) => `${p.delivered}/${p.total}`),

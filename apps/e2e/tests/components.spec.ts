@@ -39,6 +39,19 @@ test('the last Deliver Date opens Production QA; the change is in the row histor
       .filter({ visible: true }),
   ).toHaveCount(1);
 
+  // Only a Why, nothing else changed: it still shows in Notes (this used to be dropped)
+  const raw = page
+    .getByRole('row')
+    .filter({ hasText: 'Dextrose anhydrous' })
+    .filter({ visible: true })
+    .first();
+  await raw.getByRole('button', { name: /^Edit / }).click();
+  await page.getByRole('dialog').getByLabel(/Why/).fill('Supplier confirmed by phone');
+  await page.getByRole('dialog').getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByRole('dialog')).toBeHidden();
+  await expect(raw).toContainText('Supplier confirmed by phone');
+  await expect(raw).toContainText('Kabir Singh');
+
   // History shows who changed what, and why
   await page
     .getByRole('button', { name: /^History of / })
