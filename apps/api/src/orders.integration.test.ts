@@ -39,6 +39,8 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
     logi: { teams: ['LOGISTICS'] },
     // In two teams at once, with no exclusion (D24)
     multi: { teams: ['REGULATION', 'PRODUCTION'] },
+    // Regulation plus a named role elsewhere: sees Phase 1 comments (D28)
+    regAppr: { teams: ['REGULATION'], capabilities: ['APPROVER'] },
     outsider: { teams: [] as string[], capabilities: ['APPROVER'] },
   } as const;
 
@@ -272,6 +274,40 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
     expect(docKinds).not.toContain('PI_FULL');
   });
 
+  it('hides Phase 1 comments from Regulation, Design, Materials and Logistics alone (D28)', async () => {
+    type Seen = Awaited<ReturnType<typeof detail>>;
+    const cbmReturn = (d: Seen) =>
+      d.rounds.find((r) => r.channel === 'CBM' && r.verdict === 'RETURNED')!;
+    const piReject = (d: Seen) => d.votes.find((v) => v.vote === 'REJECT')!;
+    for (const who of ['reg', 'mat', 'design', 'logi']) {
+      const d = await detail(who);
+      // The chain is there, the words aren't
+      expect(cbmReturn(d)).toMatchObject({
+        verdictByName: 'mkt',
+        verdictComment: null,
+        commentsHidden: true,
+      });
+      expect(piReject(d)).toMatchObject({ comment: null, commentHidden: true });
+      const events = (await as[who]!.get(`/v1/orders/${orderId}/timeline`)).json();
+      const returned = events.find(
+        (e: { type: string; stepKey: string }) => e.type === 'RETURNED' && e.stepKey === 'cbm',
+      );
+      expect(returned).toMatchObject({ actorName: 'mkt', comment: null, commentHidden: true });
+    }
+    // Another team or a named role is enough; Admin and the people on the order always see them
+    for (const who of ['multi', 'regAppr', 'acc', 'creator', 'admin']) {
+      const d = await detail(who);
+      expect(cbmReturn(d)).toMatchObject({
+        verdictComment: 'Use 40ft containers',
+        commentsHidden: false,
+      });
+      expect(piReject(d)).toMatchObject({
+        comment: 'Rates for Prod B are wrong',
+        commentHidden: false,
+      });
+    }
+  });
+
   it('the dashboard lists team work oldest first, with tags to filter Materials work', async () => {
     const work = (await as.mat!.get('/v1/work')).json();
     expect(
@@ -430,6 +466,11 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
     expect((await task('production_qa')).holder?.team).toBe('PRODUCTION');
     const history = (await as.reg!.get(`/v1/components/${c4}/history`)).json();
     expect(history[0]).toMatchObject({ comment: 'Arrived today', actorName: 'mat' });
+    // The latest reason is shown in the table itself, to everyone who sees it (D28)
+    tables = (await as.reg!.get(`/v1/orders/${orderId}/components`)).json();
+    const starch = tables.products[1].components.find((c: { name: string }) => c.name === 'Starch');
+    expect(starch.note).toMatchObject({ text: 'Arrived today', byName: 'mat' });
+    expect(tables.products[0].components[0].note).toBeNull();
     tables = (await as.prod!.get(`/v1/orders/${orderId}/components`)).json();
     expect(
       tables.products.map((p: { delivered: number; total: number }) => `${p.delivered}/${p.total}`),

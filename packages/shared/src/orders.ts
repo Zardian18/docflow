@@ -173,6 +173,8 @@ export const ChannelRound = z.object({
   verdictAt: Instant.nullable(),
   verdictComment: z.string().nullable(),
   returnedToTeam: Team.nullable(),
+  /** The comments exist but this person may not read them (D28) */
+  commentsHidden: z.boolean(),
 });
 export type ChannelRound = z.infer<typeof ChannelRound>;
 
@@ -183,6 +185,7 @@ export const ApprovalVote = z.object({
   employeeName: z.string(),
   vote: z.enum(['APPROVE', 'REJECT']),
   comment: z.string().nullable(),
+  commentHidden: z.boolean(),
   at: Instant,
 });
 export type ApprovalVote = z.infer<typeof ApprovalVote>;
@@ -466,6 +469,8 @@ export const Component = z.object({
   deliveryDays: DayCount,
   /** Fields still needed before Materials can hand over to Production (D27) */
   missing: z.array(z.enum(COMPONENT_FIELDS)),
+  /** The latest reason Materials gave for a change to this row (D28) */
+  note: z.object({ text: z.string(), byName: z.string(), at: Instant }).nullable(),
   delivered: z.boolean(),
   updatedAt: Instant,
 });
@@ -526,6 +531,8 @@ export const OrderEvent = z.object({
   actorName: z.string().nullable(),
   actingAs: z.string().nullable(),
   comment: z.string().nullable(),
+  /** The comment exists but this person may not read it (D28) */
+  commentHidden: z.boolean(),
   details: z.record(z.string(), z.unknown()),
   at: Instant,
 });

@@ -14,13 +14,14 @@ import {
   type StepDef,
   type TaskView,
 } from '@docflow/shared';
-import { asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull } from 'drizzle-orm';
 import type { AuthUser } from '../auth/sessions.js';
 import type { Db } from '../db/client.js';
 import {
   approvalVotes,
   buyers,
   channelRounds,
+  componentChanges,
   documents,
   employees,
   holderIntervals,
@@ -33,6 +34,7 @@ import {
 import { notFound } from '../errors.js';
 import {
   canEditComponents,
+  canSeeComment,
   canSeeComponents,
   canSeeDoc,
   canSeeOrder,
@@ -223,6 +225,11 @@ export async function orderDetail(db: Db, user: AuthUser, orderId: string): Prom
   ]);
   const name = (id: string | null) => (id ? (names.get(id) ?? '—') : null);
   const tasksView = await taskViews(db, user, ctx, docs);
+  // Phase 1 comments are private to some teams (D28)
+  const commentOpen = (taskId: string | null) => {
+    const task = ctx.tasks.find((t) => t.id === taskId);
+    return !task || canSeeComment(user, ctx, stepOf(ctx.template, task.stepKey).phase);
+  };
   // Payments carry amounts, so the same people who may see the full PI see them
   const seePayments = canSeeDoc(user, ctx, 'PI_FULL') || canSeeDoc(user, ctx, 'PAYMENT_PROOF');
   return {
@@ -265,32 +272,40 @@ export async function orderDetail(db: Db, user: AuthUser, orderId: string): Prom
         taskId: d.taskId,
         roundId: d.roundId,
       })),
-    rounds: rounds.map((r) => ({
-      id: r.id,
-      taskId: r.taskId,
-      channel: r.channel,
-      round: r.round,
-      productName:
-        ctx.products.find((p) => p.id === ctx.tasks.find((t) => t.id === r.taskId)?.productId)
-          ?.name ?? null,
-      submittedByName: name(r.submittedBy),
-      submittedAt: iso(r.submittedAt),
-      submitComment: r.submitComment,
-      verdict: r.verdict,
-      verdictByName: name(r.verdictBy),
-      verdictAt: iso(r.verdictAt),
-      verdictComment: r.verdictComment,
-      returnedToTeam: r.returnedToTeam,
-    })),
-    votes: votes.map((v) => ({
-      taskId: v.taskId,
-      run: v.run,
-      stage: v.stage,
-      employeeName: name(v.employeeId) ?? '—',
-      vote: v.vote,
-      comment: v.comment,
-      at: v.createdAt.toISOString(),
-    })),
+    rounds: rounds.map((r) => {
+      const open = commentOpen(r.taskId);
+      return {
+        id: r.id,
+        taskId: r.taskId,
+        channel: r.channel,
+        round: r.round,
+        productName:
+          ctx.products.find((p) => p.id === ctx.tasks.find((t) => t.id === r.taskId)?.productId)
+            ?.name ?? null,
+        submittedByName: name(r.submittedBy),
+        submittedAt: iso(r.submittedAt),
+        submitComment: open ? r.submitComment : null,
+        verdict: r.verdict,
+        verdictByName: name(r.verdictBy),
+        verdictAt: iso(r.verdictAt),
+        verdictComment: open ? r.verdictComment : null,
+        returnedToTeam: r.returnedToTeam,
+        commentsHidden: !open && Boolean(r.submitComment || r.verdictComment),
+      };
+    }),
+    votes: votes.map((v) => {
+      const open = commentOpen(v.taskId);
+      return {
+        taskId: v.taskId,
+        run: v.run,
+        stage: v.stage,
+        employeeName: name(v.employeeId) ?? '—',
+        vote: v.vote,
+        comment: open ? v.comment : null,
+        commentHidden: !open && v.comment !== null,
+        at: v.createdAt.toISOString(),
+      };
+    }),
     payments: seePayments
       ? pays.map((p) => ({
           id: p.id,
@@ -301,7 +316,7 @@ export async function orderDetail(db: Db, user: AuthUser, orderId: string): Prom
           reference: p.reference,
           verifiedByName: name(p.verifiedBy) ?? '—',
           verifiedAt: p.verifiedAt.toISOString(),
-          comment: p.comment,
+          comment: commentOpen(p.taskId) ? p.comment : null,
         }))
       : [],
     checkpoints: checkpoints.map((c) => ({
@@ -354,7 +369,14 @@ export async function orderTimeline(
       );
     }
     if (!seePayments) delete details.payment;
-    return { ...r, details, at: r.at.toISOString() };
+    const open = !r.stepKey || canSeeComment(user, ctx, stepOf(ctx.template, r.stepKey).phase);
+    return {
+      ...r,
+      comment: open ? r.comment : null,
+      commentHidden: !open && r.comment !== null,
+      details,
+      at: r.at.toISOString(),
+    };
   });
 }
 
@@ -375,6 +397,18 @@ export async function componentTables(
     .from(orderProducts)
     .where(eq(orderProducts.orderId, orderId))
     .orderBy(asc(orderProducts.position));
+  // The latest reason given for a change to each row, shown in the table (D28)
+  const reasons = await db
+    .selectDistinctOn([componentChanges.componentId], {
+      componentId: componentChanges.componentId,
+      text: componentChanges.comment,
+      byName: employees.name,
+      at: componentChanges.createdAt,
+    })
+    .from(componentChanges)
+    .innerJoin(employees, eq(employees.id, componentChanges.actorId))
+    .where(and(eq(componentChanges.orderId, orderId), isNotNull(componentChanges.comment)))
+    .orderBy(componentChanges.componentId, desc(componentChanges.createdAt));
   // Ordering delay counts from the day production started, in India time (D27)
   const productionDay = ctx.order.productionStartedAt
     ? localDay(ctx.order.productionStartedAt)
@@ -410,6 +444,10 @@ export async function componentTables(
           orderingDays: dayCount(productionDay, r.poDate),
           deliveryDays: dayCount(r.poDate, r.deliverDate),
           missing: COMPONENT_REQUIRED_FIELDS.filter((f) => r[f] === null),
+          note: (() => {
+            const n = reasons.find((x) => x.componentId === r.id);
+            return n ? { text: n.text!, byName: n.byName, at: n.at.toISOString() } : null;
+          })(),
           delivered: r.deliverDate !== null,
           updatedAt: r.updatedAt.toISOString(),
         }));

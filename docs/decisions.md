@@ -358,3 +358,12 @@ How to restore: `docs/runbook-backup.md`.
 - **Action buttons act directly.** One button per action: no separate selector, so there is no repeated "Confirm CBM" or "Approve". Sending back and rejecting ask for the reason in the comment box.
 - **The page never scrolls sideways.** Wide tables scroll inside their own box.
 - **Payments default to INR.**
+
+### D28 — Materials notes in the table; Phase 1 comments private to some teams (owner, 22 Oct 2026)
+**Status: DECIDED.**
+- **Notes column.** The reason Materials gives when changing a component ("Why") was only in the row's history. The table now has an optional **Notes** column showing the latest reason, with who wrote it and when. Everyone who can see the Materials tab sees it.
+- **Phase 1 comments are private.** People who see an order only through **Regulation, Design, Materials or Logistics** see the whole chain (steps, who acted, when) but not the comments on any Phase 1 step. That covers the CBM loop, the buyer confirmation, the PI, the PI approval (rejection reasons included), the advance request and the advance verification.
+- **Who still sees them:** Admin; anyone named on the order; anyone in Accounts or Production; and anyone holding Marketing, Creator, Approver or Head Approver **anywhere**, even if not on this order.
+- **Likely to change:** the owner may later switch that last rule to "only when named on this order". It is one setting in `apps/api/src/engine/access.ts` (`PRIVATE_COMMENT_ROLES`).
+- **Enforced by the API, not just the screen** (like invariant 8). Hidden comments show as "Comment hidden". Order-level notes (the buyer's requirements, cancel reasons) are not affected.
+

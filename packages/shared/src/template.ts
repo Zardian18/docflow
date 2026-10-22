@@ -177,6 +177,11 @@ export interface Template {
   docAccess: Record<DocKind, Team[]>;
   /** From which phase a team can see an order (and its component tables) */
   teamVisibleFrom: Record<Team, 1 | 2 | 3>;
+  /**
+   * Comments on steps of these phases are hidden from people who see the order only through
+   * these teams (D28). They still see the steps, who acted and when.
+   */
+  commentPrivacy: { phases: Array<1 | 2 | 3>; hiddenFromTeams: Team[] };
   /** Materials can edit component rows until this step is done */
   componentsEditableUntil: string;
 }
@@ -531,6 +536,10 @@ export const EXPORT_ORDER_V1: Template = {
     INVOICE: ['LOGISTICS', 'ACCOUNTS'],
     PAYMENT_PROOF: ['ACCOUNTS'],
     BOL: ['LOGISTICS', 'ACCOUNTS'],
+  },
+  commentPrivacy: {
+    phases: [1],
+    hiddenFromTeams: ['REGULATION', 'DESIGN', 'MATERIALS', 'LOGISTICS'],
   },
   teamVisibleFrom: {
     ACCOUNTS: 1,
