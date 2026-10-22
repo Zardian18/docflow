@@ -76,6 +76,8 @@ function sentence(e: OrderEvent, step: string, product: string | null): string {
       return `Changed the order number from ${String(d.from)} to ${String(d.to)}`;
     case 'COMPONENT_ADDED':
       return `Added ${String(d.component)} to ${String(d.product)}`;
+    case 'COMPONENT_NOTE':
+      return `Added a note to ${String(d.component)}`;
     case 'COMPONENT_UPDATED':
       return `Updated ${String(d.component)} (${(d.fields as string[]).join(', ')})`;
     case 'COMPONENT_DELETED':

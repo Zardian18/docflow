@@ -137,7 +137,31 @@ export async function updateComponent(db: Db, user: AuthUser, componentId: strin
       const after = input[f] === null ? null : String(input[f]);
       return before === after ? [] : [{ field: f, oldValue: before, newValue: after }];
     });
-    if (changes.length === 0) return;
+    if (changes.length === 0) {
+      // Only a note ("Why") and nothing else changed: keep it, so it shows in the Notes column
+      // and the row's history (D28). Saving with neither is a no-op.
+      if (!input.comment) return;
+      await tx
+        .update(orderComponents)
+        .set({ updatedAt: new Date() })
+        .where(eq(orderComponents.id, componentId));
+      await recordChanges(
+        tx,
+        user,
+        row,
+        [{ field: 'note', oldValue: null, newValue: input.comment }],
+        input.comment,
+      );
+      await logEvent(tx, {
+        orderId: row.orderId,
+        type: 'COMPONENT_NOTE',
+        actorId: user.id,
+        actingAs: 'MATERIALS',
+        comment: input.comment,
+        details: { component: row.name },
+      });
+      return;
+    }
     await tx
       .update(orderComponents)
       .set({
