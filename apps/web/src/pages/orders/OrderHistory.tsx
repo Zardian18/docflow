@@ -126,6 +126,9 @@ export function OrderHistory({ order, template }: { order: OrderDetail; template
                 )}
               </p>
               {e.comment && <p className="text-muted-foreground mt-0.5">“{e.comment}”</p>}
+              {e.commentHidden && (
+                <p className="text-muted-foreground mt-0.5 italic">Comment hidden</p>
+              )}
               {docs.length > 0 && (
                 <ul className="mt-1 flex flex-wrap gap-2">
                   {docs.map((d) => (

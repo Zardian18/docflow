@@ -260,7 +260,7 @@ function ComponentDialog({
               htmlFor={`${id}-comment`}
               className="text-muted-foreground text-[13px] font-normal"
             >
-              Why (optional, kept with the change)
+              Why (optional, shown in the Notes column and kept in the history)
             </Label>
             <Input
               id={`${id}-comment`}
@@ -413,6 +413,7 @@ export function ComponentTablesView({ orderId }: { orderId: string }) {
                       'Challan No.',
                       'Trident Remark',
                       'TNS Remark',
+                      'Notes',
                       '',
                     ].map((h) => (
                       <th
@@ -461,6 +462,18 @@ export function ComponentTablesView({ orderId }: { orderId: string }) {
                         {c.tridentRemark ?? '—'}
                       </td>
                       <td className={cell + ' max-w-56 whitespace-normal'}>{c.tnsRemark ?? '—'}</td>
+                      <td className={cell + ' max-w-64 whitespace-normal'}>
+                        {c.note ? (
+                          <span className="flex flex-col">
+                            <span>{c.note.text}</span>
+                            <span className="text-muted-foreground text-xs">
+                              {c.note.byName}, {formatDateTime(c.note.at)}
+                            </span>
+                          </span>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
                       <td className={cell + ' text-right'}>
                         <span className="flex justify-end gap-1">
                           {data.editable && (

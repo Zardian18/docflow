@@ -47,6 +47,30 @@ export function canSeeDoc(
   return visibleTeams(user, ctx).some((t) => allowed.includes(t));
 }
 
+/**
+ * D28: which other roles still see private comments. ANY_ROLE: holding Marketing, Creator,
+ * Approver or Head Approver at all (the owner's choice for now). NAMED_ON_ORDER: only when on
+ * this order's chain (the owner may switch to this later).
+ */
+const PRIVATE_COMMENT_ROLES: 'ANY_ROLE' | 'NAMED_ON_ORDER' = 'ANY_ROLE';
+
+/**
+ * Comments on steps of the template's private phases (Phase 1: CBM and PI) are hidden from
+ * people who see the order only through Regulation, Design, Materials or Logistics (D28).
+ * Admin, people named on the order, other named roles and the other teams see them.
+ */
+export function canSeeComment(
+  user: Pick<AuthUser, 'id' | 'teams' | 'capabilities'>,
+  ctx: OrderCtx,
+  phase: number,
+) {
+  const privacy = ctx.template.commentPrivacy;
+  if (!privacy.phases.includes(phase as 1 | 2 | 3)) return true;
+  if (user.capabilities.includes('ADMIN') || isNamed(user, ctx)) return true;
+  if (PRIVATE_COMMENT_ROLES === 'ANY_ROLE' && user.capabilities.length > 0) return true;
+  return user.teams.some((t) => !privacy.hiddenFromTeams.includes(t));
+}
+
 /** Materials edits the component tables from production start until hand-over (C2) */
 export function canEditComponents(user: Pick<AuthUser, 'teams'>, ctx: OrderCtx) {
   if (ctx.order.status !== 'ACTIVE' || !ctx.order.productionStartedAt) return false;

@@ -31,6 +31,13 @@ test('the last Deliver Date opens Production QA; the change is in the row histor
   await expect(
     page.getByRole('row').filter({ hasText: 'Dispatched' }).filter({ visible: true }),
   ).toHaveCount(0);
+  // The reason shows in the table's Notes column for everyone (D28)
+  await expect(
+    page
+      .getByRole('row')
+      .filter({ hasText: 'Truck arrived this morning' })
+      .filter({ visible: true }),
+  ).toHaveCount(1);
 
   // History shows who changed what, and why
   await page
@@ -50,4 +57,20 @@ test('the last Deliver Date opens Production QA; the change is in the row histor
     farhan.page.getByRole('main').getByText('Production QA').filter({ visible: true }).first(),
   ).toBeVisible();
   await farhan.context.close();
+});
+
+test('Phase 1 comments are hidden from Regulation alone, shown to Production (D28)', async ({
+  browser,
+}) => {
+  const lina = await signedIn(browser, 'lina');
+  await openOrder(lina.page, ORDERS.delivery);
+  await expect(lina.page.getByText('Comments hidden').first()).toBeVisible();
+  await expect(lina.page.getByText(/Use 40ft HC containers/)).toHaveCount(0);
+  await lina.context.close();
+  // Dev is in Regulation and Production: Production can read them
+  const dev = await signedIn(browser, 'dev');
+  await openOrder(dev.page, ORDERS.delivery);
+  await expect(dev.page.getByText(/Use 40ft HC containers/).first()).toBeVisible();
+  await expect(dev.page.getByText('Comments hidden')).toHaveCount(0);
+  await dev.context.close();
 });

@@ -88,6 +88,10 @@ function Rounds({ rounds }: { rounds: ChannelRound[] }) {
           {!r.submittedAt && !r.verdict && (
             <span className="text-muted-foreground">In progress</span>
           )}
+          {/* Phase 1 comments are private to some teams (D28) */}
+          {r.commentsHidden && (
+            <span className="text-muted-foreground block text-xs italic">Comments hidden</span>
+          )}
         </li>
       ))}
     </ol>
@@ -125,6 +129,9 @@ function Votes({ step, task, votes }: { step: StepDef; task: TaskView; votes: Ap
                     {v.vote === 'APPROVE' ? 'approved' : 'rejected'} by {v.employeeName},{' '}
                     {formatDateTime(v.at)}
                     {v.comment && <span className="text-muted-foreground"> · “{v.comment}”</span>}
+                    {v.commentHidden && (
+                      <span className="text-muted-foreground italic"> · Comment hidden</span>
+                    )}
                   </span>
                 ))}
               </li>
