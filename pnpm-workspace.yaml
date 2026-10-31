@@ -17,6 +17,12 @@ overrides:
   # GHSA-67mh-4wv8-2f99 (dev-server CORS): drizzle-kit's TS config loader pins esbuild 0.18;
   # it only uses transform, which is unchanged in 0.25
   '@esbuild-kit/core-utils>esbuild': 0.25.12
+  # Zod memory exhaustion on oversized collections (patched 4.6.6): the React hooks lint rule
+  # accepts zod ^3.25 || ^4, so the app's own patched version is drop-in
+  'eslint-plugin-react-hooks>zod': 4.6.7
+  # undici DoS / redirect / TLS advisories (patched 7.30.1): wrangler's local simulator only,
+  # same minor line
+  'miniflare>undici': 7.30.1
 
 auditConfig:
   ignoreGhsas:
