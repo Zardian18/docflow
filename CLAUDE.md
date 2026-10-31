@@ -63,7 +63,7 @@ Security (Phase 7, `docs/security.md`):
 - **Web headers:** the security headers, CSP included, are generated into `dist/_headers` by `apps/web/vite.config.ts`. When adding a new external origin the browser calls, add it there.
 - **Dependencies:** `pnpm audit --audit-level high` runs in CI. Overrides and justified ignores live in `pnpm-workspace.yaml`.
 
-Version notes: TypeScript is pinned to 6.0.x because typescript-eslint doesn't support 7.x yet. pnpm only runs install scripts for packages listed under `allowBuilds` in `pnpm-workspace.yaml` (`pnpm approve-builds <pkg>`).
+Version notes: TypeScript is pinned to 6.0.x because typescript-eslint doesn't support 7.x yet. shadcn is **not** a dependency: its stylesheet is vendored as `apps/web/src/shadcn-tailwind.css` (the CLI's dependency tree kept failing the audit). If `pnpm dlx shadcn add` re-adds the `shadcn` package or a `shadcn/tailwind.css` import, remove them again. pnpm only runs install scripts for packages listed under `allowBuilds` in `pnpm-workspace.yaml` (`pnpm approve-builds <pkg>`).
 
 ## Invariants that must never be broken (v2)
 1. **The workflow is data.** The steps, who holds them, loops, gates and dependencies live in `packages/shared/src/template.ts`. The engine (`apps/api/src/engine/`) implements a fixed set of step kinds and never branches on a step's name. To change the workflow, add a new template version and keep old ones while orders use them.
