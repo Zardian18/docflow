@@ -3,6 +3,7 @@ import {
   SLOT_INFO,
   SLOTS,
   stepOf,
+  TEAM_LABEL,
   type Component,
   type ComponentStatus,
   type ComponentTables,
@@ -13,12 +14,15 @@ import {
   type ShipmentStatus,
   type StepDef,
   type TaskView,
+  type Team,
 } from '@docflow/shared';
 import { and, asc, desc, eq, inArray, isNotNull } from 'drizzle-orm';
 import type { AuthUser } from '../auth/sessions.js';
 import type { Db } from '../db/client.js';
 import {
   approvalVotes,
+  audienceMembers,
+  audiences,
   buyers,
   channelRounds,
   componentChanges,
@@ -34,11 +38,13 @@ import {
 import { notFound } from '../errors.js';
 import {
   canEditComponents,
-  canSeeComment,
+  canSeeAudience,
   canSeeComponents,
   canSeeDoc,
   canSeeOrder,
   currentPhase,
+  seesPhase,
+  type AudienceMembers,
 } from './access.js';
 import { dayCount, heldClock, localDay, sinceClock } from './clock.js';
 import {
@@ -71,6 +77,63 @@ export async function visibleCtx(db: Db, user: AuthUser, orderId: string) {
 }
 
 type DocRow = typeof documents.$inferSelect;
+
+/**
+ * What one person may see of an order's private parts (D29): private messages (by audience),
+ * a phase hidden from Marketing alone, and documents by kind.
+ */
+export async function privacyFor(db: Db, user: AuthUser, ctx: OrderCtx) {
+  const rows = await db
+    .select({
+      audienceId: audienceMembers.audienceId,
+      employeeId: audienceMembers.employeeId,
+      employeeName: employees.name,
+      team: audienceMembers.team,
+      tagged: audienceMembers.tagged,
+    })
+    .from(audienceMembers)
+    .innerJoin(audiences, eq(audiences.id, audienceMembers.audienceId))
+    .leftJoin(employees, eq(employees.id, audienceMembers.employeeId))
+    .where(eq(audiences.orderId, ctx.order.id));
+  const members = new Map<string, AudienceMembers & { labels: string[] }>();
+  for (const r of rows) {
+    const m = members.get(r.audienceId) ?? { employeeIds: [], teams: [], labels: [] };
+    if (r.employeeId) m.employeeIds.push(r.employeeId);
+    if (r.team) m.teams.push(r.team as Team);
+    if (r.tagged) m.labels.push(r.team ? TEAM_LABEL[r.team as Team] : (r.employeeName ?? '—'));
+    members.set(r.audienceId, m);
+  }
+  const sees = (audienceId: string | null) =>
+    !audienceId || canSeeAudience(user, ctx, members.get(audienceId));
+  /** In a private message's audience by name or team: shown even in a phase hidden from them */
+  const taggedIn = (audienceId: string | null) => {
+    const m = audienceId ? members.get(audienceId) : undefined;
+    return !!m && (m.employeeIds.includes(user.id) || m.teams.some((t) => user.teams.includes(t)));
+  };
+  /** Who a private message is shared with, as labels; null when not private */
+  const sharedWith = (audienceId: string | null) =>
+    audienceId ? (members.get(audienceId)?.labels ?? []) : null;
+  const phaseOfTask = (taskId: string | null) => {
+    const task = ctx.tasks.find((t) => t.id === taskId);
+    return task ? stepOf(ctx.template, task.stepKey).phase : null;
+  };
+  const seesTask = (taskId: string | null) => {
+    const phase = phaseOfTask(taskId);
+    return phase === null || seesPhase(user, ctx, phase);
+  };
+  const privatePhase = ctx.template.phasePrivacy?.phase;
+  const hiddenPhases =
+    privatePhase && !seesPhase(user, ctx, privatePhase) ? [privatePhase] : ([] as number[]);
+  const seesDoc = (d: DocRow) =>
+    canSeeDoc(user, ctx, d.kind) &&
+    sees(d.audienceId) &&
+    (taggedIn(d.audienceId) ||
+      (d.componentId && privatePhase ? seesPhase(user, ctx, privatePhase) : seesTask(d.taskId)));
+  /** A private-or-not part of a step: its phase visible and its audience, or tagged in it */
+  const seesPart = (taskId: string | null, audienceId: string | null) =>
+    taggedIn(audienceId) || (seesTask(taskId) && sees(audienceId));
+  return { sees, sharedWith, seesTask, seesDoc, seesPart, taggedIn, hiddenPhases };
+}
 
 /** The document kinds a step is about: what it attaches, and what its approval chain approves */
 function reviewKinds(step: StepDef): DocKind[] {
@@ -143,6 +206,8 @@ export async function taskViews(
   const views: TaskView[] = [];
   for (const t of sorted) {
     const step = stepOf(ctx.template, t.stepKey);
+    // A phase hidden from this person shows as one line, not its steps (D29)
+    if (!seesPhase(user, ctx, step.phase)) continue;
     const mine = intervals.filter((i) => i.taskId === t.id);
     const holder = t.holderTeam || t.holderSlot ? { team: t.holderTeam, slot: t.holderSlot } : null;
     const current = mine.find((i) => i.endedAt === null);
@@ -224,12 +289,9 @@ export async function orderDetail(db: Db, user: AuthUser, orderId: string): Prom
     ...[...ctx.slots.values()].flat(),
   ]);
   const name = (id: string | null) => (id ? (names.get(id) ?? '—') : null);
-  const tasksView = await taskViews(db, user, ctx, docs);
-  // Phase 1 comments are private to some teams (D28)
-  const commentOpen = (taskId: string | null) => {
-    const task = ctx.tasks.find((t) => t.id === taskId);
-    return !task || canSeeComment(user, ctx, stepOf(ctx.template, task.stepKey).phase);
-  };
+  const privacy = await privacyFor(db, user, ctx);
+  const visibleDocs = docs.filter(privacy.seesDoc);
+  const tasksView = await taskViews(db, user, ctx, visibleDocs);
   // Payments carry amounts, so the same people who may see the full PI see them
   const seePayments = canSeeDoc(user, ctx, 'PI_FULL') || canSeeDoc(user, ctx, 'PAYMENT_PROOF');
   return {
@@ -259,21 +321,26 @@ export async function orderDetail(db: Db, user: AuthUser, orderId: string): Prom
     })),
     products: ctx.products,
     tasks: tasksView,
-    documents: docs
-      .filter((d) => canSeeDoc(user, ctx, d.kind))
-      .map((d) => ({
-        id: d.id,
-        kind: d.kind,
-        fileName: d.fileName,
-        fileMime: d.fileMime,
-        fileSize: d.fileSize,
-        uploadedByName: name(d.uploadedBy) ?? '—',
-        uploadedAt: d.uploadedAt.toISOString(),
-        taskId: d.taskId,
-        roundId: d.roundId,
-      })),
-    rounds: rounds.map((r) => {
-      const open = commentOpen(r.taskId);
+    documents: visibleDocs.map((d) => ({
+      id: d.id,
+      kind: d.kind,
+      fileName: d.fileName,
+      fileMime: d.fileMime,
+      fileSize: d.fileSize,
+      uploadedByName: name(d.uploadedBy) ?? '—',
+      uploadedAt: d.uploadedAt.toISOString(),
+      taskId: d.taskId,
+      roundId: d.roundId,
+      componentId: d.componentId,
+      privateTo: privacy.sharedWith(d.audienceId),
+    })),
+    rounds: rounds.flatMap((r) => {
+      // A private part someone isn't in is left out entirely; one they're tagged in shows even
+      // in a phase otherwise hidden from them (D29)
+      const submit = privacy.seesPart(r.taskId, r.submitAudienceId);
+      const verdict = privacy.seesPart(r.taskId, r.verdictAudienceId);
+      const shownParts = (submit && r.submittedAt) || (verdict && r.verdict);
+      if (!shownParts && (r.submittedAt || r.verdict || !privacy.seesTask(r.taskId))) return [];
       return {
         id: r.id,
         taskId: r.taskId,
@@ -282,51 +349,57 @@ export async function orderDetail(db: Db, user: AuthUser, orderId: string): Prom
         productName:
           ctx.products.find((p) => p.id === ctx.tasks.find((t) => t.id === r.taskId)?.productId)
             ?.name ?? null,
-        submittedByName: name(r.submittedBy),
-        submittedAt: iso(r.submittedAt),
-        submitComment: open ? r.submitComment : null,
-        verdict: r.verdict,
-        verdictByName: name(r.verdictBy),
-        verdictAt: iso(r.verdictAt),
-        verdictComment: open ? r.verdictComment : null,
-        returnedToTeam: r.returnedToTeam,
-        commentsHidden: !open && Boolean(r.submitComment || r.verdictComment),
+        submittedByName: submit ? name(r.submittedBy) : null,
+        submittedAt: submit ? iso(r.submittedAt) : null,
+        submitComment: submit ? r.submitComment : null,
+        verdict: verdict ? r.verdict : null,
+        verdictByName: verdict ? name(r.verdictBy) : null,
+        verdictAt: verdict ? iso(r.verdictAt) : null,
+        verdictComment: verdict ? r.verdictComment : null,
+        returnedToTeam: verdict ? r.returnedToTeam : null,
+        submitPrivateTo: submit ? privacy.sharedWith(r.submitAudienceId) : null,
+        verdictPrivateTo: verdict ? privacy.sharedWith(r.verdictAudienceId) : null,
       };
     }),
-    votes: votes.map((v) => {
-      const open = commentOpen(v.taskId);
-      return {
+    votes: votes
+      .filter((v) => privacy.seesPart(v.taskId, v.audienceId))
+      .map((v) => ({
         taskId: v.taskId,
         run: v.run,
         stage: v.stage,
         employeeName: name(v.employeeId) ?? '—',
         vote: v.vote,
-        comment: open ? v.comment : null,
-        commentHidden: !open && v.comment !== null,
+        comment: v.comment,
+        privateTo: privacy.sharedWith(v.audienceId),
         at: v.createdAt.toISOString(),
-      };
-    }),
+      })),
     payments: seePayments
-      ? pays.map((p) => ({
-          id: p.id,
-          kind: p.kind,
-          receivedOn: p.receivedOn,
-          amount: p.amount,
-          currency: p.currency,
-          reference: p.reference,
-          verifiedByName: name(p.verifiedBy) ?? '—',
-          verifiedAt: p.verifiedAt.toISOString(),
-          comment: commentOpen(p.taskId) ? p.comment : null,
-        }))
+      ? pays
+          .filter((p) => privacy.sees(p.audienceId))
+          .map((p) => ({
+            id: p.id,
+            kind: p.kind,
+            receivedOn: p.receivedOn,
+            amount: p.amount,
+            currency: p.currency,
+            reference: p.reference,
+            verifiedByName: name(p.verifiedBy) ?? '—',
+            verifiedAt: p.verifiedAt.toISOString(),
+            comment: p.comment,
+            privateTo: privacy.sharedWith(p.audienceId),
+          }))
       : [],
-    checkpoints: checkpoints.map((c) => ({
-      id: c.id,
-      status: c.status as ShipmentStatus,
-      note: c.note,
-      happenedOn: c.happenedOn,
-      loggedByName: name(c.loggedBy) ?? '—',
-      loggedAt: c.loggedAt.toISOString(),
-    })),
+    checkpoints: checkpoints
+      .filter((c) => privacy.sees(c.audienceId))
+      .map((c) => ({
+        id: c.id,
+        status: c.status as ShipmentStatus,
+        note: c.note,
+        happenedOn: c.happenedOn,
+        loggedByName: name(c.loggedBy) ?? '—',
+        loggedAt: c.loggedAt.toISOString(),
+        privateTo: privacy.sharedWith(c.audienceId),
+      })),
     canEditComponents: canEditComponents(user, ctx),
     canCancel:
       (o.status === 'ACTIVE' || o.status === 'NO_ACTION_NEEDED') &&
@@ -334,6 +407,7 @@ export async function orderDetail(db: Db, user: AuthUser, orderId: string): Prom
     canSeeComponents: canSeeComponents(user, ctx),
     canRename: canRename(user, ctx),
     editableSlots: canEditChain(user, ctx) ? editableSlots(ctx) : [],
+    hiddenPhases: privacy.hiddenPhases,
   };
 }
 
@@ -353,6 +427,7 @@ export async function orderTimeline(
       actorName: employees.name,
       actingAs: orderEvents.actingAs,
       comment: orderEvents.comment,
+      audienceId: orderEvents.audienceId,
       details: orderEvents.details,
       at: orderEvents.createdAt,
     })
@@ -361,7 +436,21 @@ export async function orderTimeline(
     .where(eq(orderEvents.orderId, orderId))
     .orderBy(asc(orderEvents.createdAt));
   const seePayments = canSeeDoc(user, ctx, 'PI_FULL') || canSeeDoc(user, ctx, 'PAYMENT_PROOF');
-  return rows.map((r) => {
+  const privacy = await privacyFor(db, user, ctx);
+  const privatePhase = ctx.template.phasePrivacy;
+  const shown = (r: (typeof rows)[number]) => {
+    if (!privacy.sees(r.audienceId)) return false;
+    if (privacy.taggedIn(r.audienceId)) return true;
+    if (r.type.startsWith('COMPONENT_')) {
+      return !privatePhase || !privacy.hiddenPhases.includes(privatePhase.phase);
+    }
+    if (!r.stepKey) return true;
+    const phase = stepOf(ctx.template, r.stepKey).phase;
+    if (!privacy.hiddenPhases.includes(phase)) return true;
+    // Marketing hears of the hidden phase only when it finishes (D29)
+    return r.type === 'GATE_PASSED' && !!privatePhase?.revealSteps.includes(r.stepKey);
+  };
+  return rows.filter(shown).map(({ audienceId, ...r }) => {
     const details = { ...(r.details as Record<string, unknown>) };
     if (Array.isArray(details.documents)) {
       details.documents = (details.documents as Array<{ kind: DocKind }>).filter((d) =>
@@ -369,14 +458,7 @@ export async function orderTimeline(
       );
     }
     if (!seePayments) delete details.payment;
-    const open = !r.stepKey || canSeeComment(user, ctx, stepOf(ctx.template, r.stepKey).phase);
-    return {
-      ...r,
-      comment: open ? r.comment : null,
-      commentHidden: !open && r.comment !== null,
-      details,
-      at: r.at.toISOString(),
-    };
+    return { ...r, privateTo: privacy.sharedWith(audienceId), details, at: r.at.toISOString() };
   });
 }
 
@@ -409,6 +491,13 @@ export async function componentTables(
     .innerJoin(employees, eq(employees.id, componentChanges.actorId))
     .where(and(eq(componentChanges.orderId, orderId), isNotNull(componentChanges.comment)))
     .orderBy(componentChanges.componentId, desc(componentChanges.createdAt));
+  // Each component's latest PO, for those who may open it (D29)
+  const privacy = await privacyFor(db, user, ctx);
+  const pos = await db
+    .select()
+    .from(documents)
+    .where(and(eq(documents.orderId, orderId), eq(documents.kind, 'PO')))
+    .orderBy(desc(documents.uploadedAt));
   // Ordering delay counts from the day production started, in India time (D27)
   const productionDay = ctx.order.productionStartedAt
     ? localDay(ctx.order.productionStartedAt)
@@ -444,6 +533,13 @@ export async function componentTables(
           orderingDays: dayCount(productionDay, r.poDate),
           deliveryDays: dayCount(r.poDate, r.deliverDate),
           missing: COMPONENT_REQUIRED_FIELDS.filter((f) => r[f] === null),
+          po: (() => {
+            const d = pos.find((x) => x.componentId === r.id);
+            return d && privacy.seesDoc(d)
+              ? { id: d.id, kind: d.kind, fileName: d.fileName, fileMime: d.fileMime }
+              : null;
+          })(),
+          hasPo: pos.some((x) => x.componentId === r.id),
           note: (() => {
             const n = reasons.find((x) => x.componentId === r.id);
             return n ? { text: n.text!, byName: n.byName, at: n.at.toISOString() } : null;

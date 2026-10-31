@@ -1,5 +1,7 @@
 import {
+  APPROVER_SLOTS,
   COMPONENT_REQUIRED_FIELDS,
+  DOC_KIND_LABEL,
   CURRENT_TEMPLATE,
   findTemplate,
   SLOT_INFO,
@@ -25,6 +27,8 @@ import type { AuthUser } from '../auth/sessions.js';
 import type { Db, Tx } from '../db/client.js';
 import {
   approvalVotes,
+  audienceMembers,
+  audiences,
   buyers,
   buyerSlotGates,
   buyerSlotPeople,
@@ -33,6 +37,7 @@ import {
   employeeCapabilities,
   employees,
   holderIntervals,
+  notices,
   orderComponents,
   orderEvents,
   orderProducts,
@@ -42,6 +47,7 @@ import {
   payments,
   shipmentCheckpoints,
   tasks,
+  teamMembers,
 } from '../db/schema.js';
 import { AppError, conflict, forbidden, notFound } from '../errors.js';
 import type { StorageService } from '../storage/storage.js';
@@ -190,6 +196,8 @@ export async function logEvent(
     actingAs?: string | null;
     comment?: string | null;
     details?: Record<string, unknown>;
+    /** A private message's audience (D29) */
+    audienceId?: string | null;
   },
 ) {
   await tx.insert(orderEvents).values({
@@ -201,6 +209,7 @@ export async function logEvent(
     actingAs: e.actingAs ?? null,
     comment: e.comment ?? null,
     details: e.details ?? {},
+    audienceId: e.audienceId ?? null,
   });
 }
 
@@ -835,12 +844,14 @@ export async function act(
       }
       const step = stepOf(ctx.template, task.stepKey);
       const actingAs = (task.holderTeam ?? task.holderSlot)!;
-      const base = {
+      const audience = await createAudience(tx, ctx, step, user.id, input);
+      const base: Base = {
         orderId: ctx.order.id,
         taskId: task.id,
         stepKey: step.key,
         actorId: user.id,
         actingAs,
+        audienceId: audience?.id ?? null,
       };
       const docsFor = (roundId: string | null) =>
         attachFiles(tx, files, {
@@ -848,6 +859,7 @@ export async function act(
           taskId: task.id,
           roundId,
           userId: user.id,
+          audienceId: base.audienceId,
         });
       const allowedKinds = new Set(stepDocKinds(step));
       for (const f of files) {
@@ -891,6 +903,7 @@ export async function act(
               note: input.comment,
               happenedOn: input.date ?? new Date().toISOString().slice(0, 10),
               loggedBy: user.id,
+              audienceId: base.audienceId,
             })
             .returning({ id: shipmentCheckpoints.id });
           await logEvent(tx, {
@@ -910,6 +923,37 @@ export async function act(
           await logEvent(tx, { ...base, type: 'CLOSED', comment: input.comment });
           break;
       }
+      // Dashboard notices (D29): a private message for those it is shared with, and a payment
+      // proof for the order's approvers and Head Approvers
+      const product = ctx.products.find((p) => p.id === task.productId)?.name;
+      const title = product ? `${step.title} · ${product}` : step.title;
+      const notify = async (
+        ids: string[],
+        kind: 'PRIVATE_MESSAGE' | 'PAYMENT_PROOF',
+        t: string,
+      ) => {
+        const to = [...new Set(ids)].filter((id) => id !== user.id);
+        if (to.length === 0) return;
+        await tx.insert(notices).values(
+          to.map((employeeId) => ({
+            orderId: ctx.order.id,
+            employeeId,
+            kind,
+            taskId: task.id,
+            title: t,
+            actorId: user.id,
+            comment: input.comment,
+          })),
+        );
+      };
+      if (audience) await notify(audience.notify, 'PRIVATE_MESSAGE', title);
+      if (files.some((f) => f.kind === 'PAYMENT_PROOF')) {
+        await notify(
+          APPROVER_SLOTS.flatMap((s) => ctx.slots.get(s) ?? []),
+          'PAYMENT_PROOF',
+          `${DOC_KIND_LABEL.PAYMENT_PROOF} · ${step.title}`,
+        );
+      }
       await tx.update(orders).set({ updatedAt: new Date() }).where(eq(orders.id, ctx.order.id));
       await advance(tx, ctx);
     });
@@ -918,6 +962,78 @@ export async function act(
     throw err;
   }
   await removeUploadObjects(storage, files);
+}
+
+/** Everyone who takes part in a step: every side or stage, and a rejection's reopened step */
+function stepActors(ctx: OrderCtx, step: StepDef): Actor[] {
+  switch (step.kind) {
+    case 'REVIEW_LOOP':
+      return [...step.submitters, step.reviewer];
+    case 'APPROVAL_CHAIN':
+      return [
+        ...step.stages.map((s) => s.actor),
+        ...(step.onReject === 'RESTART'
+          ? []
+          : stepActors(ctx, stepOf(ctx.template, step.onReject.reopen))),
+      ];
+    case 'DATA_GATE':
+      return [];
+    default:
+      return [step.actor];
+  }
+}
+
+/**
+ * A private action (D29): who sees it is fixed now. The writer, the people and teams they
+ * tagged, and everyone taking part in the step (so whoever gets the work back can read why).
+ * Approvers, Head Approvers and Admin always see it too, checked when reading. Returns who
+ * gets a dashboard notice: the tagged people, members of tagged teams, and the approvers.
+ */
+async function createAudience(
+  tx: Tx,
+  ctx: OrderCtx,
+  step: StepDef,
+  writerId: string,
+  input: ActionInput,
+) {
+  if (!input.privateTo) return null;
+  const tagged = input.privateTo;
+  const people = new Set<string>([writerId]);
+  const teams = new Set<Team>();
+  for (const a of stepActors(ctx, step)) {
+    if ('team' in a) teams.add(a.team);
+    else for (const id of ctx.slots.get(a.slot) ?? []) people.add(id);
+  }
+  const [row] = await tx
+    .insert(audiences)
+    .values({ orderId: ctx.order.id, createdBy: writerId })
+    .returning({ id: audiences.id });
+  const members = [
+    ...tagged.employeeIds.map((employeeId) => ({ employeeId, team: null, tagged: true })),
+    ...tagged.teams.map((team) => ({ employeeId: null, team, tagged: true })),
+    ...[...people]
+      .filter((id) => !tagged.employeeIds.includes(id))
+      .map((employeeId) => ({ employeeId, team: null, tagged: false })),
+    ...[...teams]
+      .filter((t) => !tagged.teams.includes(t))
+      .map((team) => ({ employeeId: null, team, tagged: false })),
+  ];
+  await tx.insert(audienceMembers).values(members.map((m) => ({ ...m, audienceId: row!.id })));
+  const inTaggedTeams = tagged.teams.length
+    ? await tx
+        .select({ id: teamMembers.employeeId })
+        .from(teamMembers)
+        .innerJoin(employees, eq(employees.id, teamMembers.employeeId))
+        .where(and(inArray(teamMembers.team, tagged.teams), eq(employees.isActive, true)))
+    : [];
+  return {
+    id: row!.id,
+    notify: [
+      ...tagged.employeeIds,
+      ...inTaggedTeams.map((r) => r.id),
+      ...APPROVER_SLOTS.flatMap((s) => ctx.slots.get(s) ?? []),
+    ],
+  };
 }
 
 function loggedDate(date: string | undefined) {
@@ -937,7 +1053,15 @@ function stepDocKinds(step: StepDef) {
   return [];
 }
 
-type Base = { orderId: string; taskId: string; stepKey: string; actorId: string; actingAs: string };
+type Base = {
+  orderId: string;
+  taskId: string;
+  stepKey: string;
+  actorId: string;
+  actingAs: string;
+  /** Set when this action is a private message (D29) */
+  audienceId: string | null;
+};
 type DocsFor = (
   roundId: string | null,
 ) => Promise<Array<{ id: string; kind: string; fileName: string }>>;
@@ -949,6 +1073,7 @@ async function recordPayment(
   input: ActionInput,
   kind: 'ADVANCE' | 'BALANCE',
   userId: string,
+  audienceId: string | null,
 ) {
   if (!input.payment) throw badRequest('PAYMENT_REQUIRED', 'Enter the payment details.');
   loggedDate(input.payment.receivedOn);
@@ -964,6 +1089,7 @@ async function recordPayment(
       reference: input.payment.reference,
       verifiedBy: userId,
       comment: input.comment,
+      audienceId,
     })
     .returning({ id: payments.id });
   return p!.id;
@@ -1014,6 +1140,26 @@ async function completeTaskStep(
         'COMPONENTS_REQUIRED',
         `Add at least one ${TAG_LABEL[step.needsComponents].toLowerCase()} component for this product in the Materials tab first.`,
         { kind: step.needsComponents },
+      );
+    }
+  }
+  if (step.needsComponents && step.needsComponentDoc) {
+    // Every component of that type needs its document, e.g. its PO (D29)
+    const missing = await tx
+      .select({ name: orderComponents.name })
+      .from(orderComponents)
+      .where(
+        and(
+          eq(orderComponents.productId, task.productId!),
+          eq(orderComponents.kind, step.needsComponents),
+          sql`not exists (select 1 from ${documents} d where d.component_id = ${orderComponents.id} and d.kind = ${step.needsComponentDoc})`,
+        ),
+      );
+    if (missing.length > 0) {
+      throw badRequest(
+        'COMPONENT_DOC_REQUIRED',
+        `Upload the ${DOC_KIND_LABEL[step.needsComponentDoc]} for ${missing.map((m) => m.name).join(', ')} first.`,
+        { components: missing.map((m) => m.name) },
       );
     }
   }
@@ -1068,6 +1214,7 @@ async function completeTaskStep(
       input,
       step.paymentKind ?? 'ADVANCE',
       base.actorId,
+      base.audienceId,
     );
     details.payment = input.payment;
   }
@@ -1102,7 +1249,12 @@ async function reviewAction(
     }
     await tx
       .update(channelRounds)
-      .set({ submittedBy: base.actorId, submittedAt: new Date(), submitComment: input.comment })
+      .set({
+        submittedBy: base.actorId,
+        submittedAt: new Date(),
+        submitComment: input.comment,
+        submitAudienceId: base.audienceId,
+      })
       .where(eq(channelRounds.id, round.id));
     task.side = 'REVIEWER';
     await setHolder(tx, task, actorHolder(step.reviewer), 'SUBMITTED');
@@ -1123,6 +1275,7 @@ async function reviewAction(
         verdictBy: base.actorId,
         verdictAt: new Date(),
         verdictComment: input.comment,
+        verdictAudienceId: base.audienceId,
       })
       .where(eq(channelRounds.id, round.id));
     await completeTask(tx, ctx, task, step, base.actorId);
@@ -1156,6 +1309,7 @@ async function reviewAction(
       verdictBy: base.actorId,
       verdictAt: new Date(),
       verdictComment: input.comment,
+      verdictAudienceId: base.audienceId,
       returnedToTeam,
     })
     .where(eq(channelRounds.id, round.id));
@@ -1200,6 +1354,7 @@ async function approvalAction(
       input,
       stage.paymentKind ?? 'BALANCE',
       userId,
+      base.audienceId,
     );
     details.payment = input.payment;
   }
@@ -1211,6 +1366,7 @@ async function approvalAction(
     employeeId: userId,
     vote: input.action === 'APPROVE' ? 'APPROVE' : 'REJECT',
     comment: input.comment,
+    audienceId: base.audienceId,
   });
   await logEvent(tx, {
     ...base,

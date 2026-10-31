@@ -127,7 +127,16 @@ export async function prepareFiles(
 export async function attachFiles(
   tx: Tx,
   files: PreparedFile[],
-  ctx: { orderId: string; taskId: string | null; roundId: string | null; userId: string },
+  ctx: {
+    orderId: string;
+    taskId: string | null;
+    roundId: string | null;
+    userId: string;
+    /** A private action's audience (D29) */
+    audienceId?: string | null;
+    /** A component's PO (D29) */
+    componentId?: string | null;
+  },
 ) {
   if (files.length === 0) return [];
   const claimed = await tx
@@ -153,6 +162,8 @@ export async function attachFiles(
         orderId: ctx.orderId,
         taskId: ctx.taskId,
         roundId: ctx.roundId,
+        audienceId: ctx.audienceId ?? null,
+        componentId: ctx.componentId ?? null,
         kind: f.kind,
         fileKey: f.fileKey,
         fileName: f.fileName,

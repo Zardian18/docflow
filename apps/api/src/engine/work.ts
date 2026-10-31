@@ -10,14 +10,14 @@ import {
   type WorkQuery,
   type WorkResponse,
 } from '@docflow/shared';
-import { inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { z } from 'zod';
 import type { AuthUser } from '../auth/sessions.js';
 import type { Db } from '../db/client.js';
-import { documents } from '../db/schema.js';
+import { buyers, documents, employees, notices, orders } from '../db/schema.js';
 import { sinceClock } from './clock.js';
 import { loadCtx } from './engine.js';
-import { reviewDocsFor } from './views.js';
+import { privacyFor, reviewDocsFor } from './views.js';
 
 type Query = z.output<typeof WorkQuery>;
 
@@ -128,6 +128,10 @@ export async function myWork(db: Db, user: AuthUser, query: Query): Promise<Work
       : Promise.resolve([]),
   ]);
   const ctxOf = new Map(ctxs.map((c) => [c.order.id, c]));
+  // Only documents this person may open: by kind, phase and private audience (D29)
+  const privacies = new Map(
+    await Promise.all(ctxs.map(async (c) => [c.order.id, await privacyFor(db, user, c)] as const)),
+  );
 
   const items = shown
     .sort((a, b) => {
@@ -170,7 +174,7 @@ export async function myWork(db: Db, user: AuthUser, query: Query): Promise<Work
           user,
           ctxOf.get(r.order_id)!,
           { id: r.task_id, stepKey: r.step_key },
-          docs.filter((d) => d.orderId === r.order_id),
+          docs.filter((d) => d.orderId === r.order_id && privacies.get(r.order_id)!.seesDoc(d)),
         ),
       };
     });
@@ -188,11 +192,43 @@ export async function myWork(db: Db, user: AuthUser, query: Query): Promise<Work
   ];
   const uniq = <T extends { id: string; name: string }>(list: T[]) =>
     [...new Map(list.map((x) => [x.id, x])).values()].sort((a, b) => a.name.localeCompare(b.name));
+  // Messages and files shared with this person, until they mark them read (D29)
+  const unread = await db
+    .select({
+      id: notices.id,
+      kind: notices.kind,
+      orderId: notices.orderId,
+      orderRef: orders.ref,
+      buyerName: buyers.name,
+      taskId: notices.taskId,
+      title: notices.title,
+      actorName: employees.name,
+      comment: notices.comment,
+      at: notices.createdAt,
+    })
+    .from(notices)
+    .innerJoin(orders, eq(orders.id, notices.orderId))
+    .innerJoin(buyers, eq(buyers.id, orders.buyerId))
+    .leftJoin(employees, eq(employees.id, notices.actorId))
+    .where(and(eq(notices.employeeId, user.id), isNull(notices.readAt)))
+    .orderBy(desc(notices.createdAt))
+    .limit(100);
   return {
     items,
     tabs,
     buyers: uniq(all.map((r) => ({ id: r.buyer_id, name: r.buyer_name }))),
+    notices: unread.map((n) => ({ ...n, at: n.at.toISOString() })),
   };
+}
+
+/** Marks one of this person's notices read; someone else's is a 404 (D29) */
+export async function markNoticeRead(db: Db, user: AuthUser, noticeId: string) {
+  const [row] = await db
+    .update(notices)
+    .set({ readAt: new Date() })
+    .where(and(eq(notices.id, noticeId), eq(notices.employeeId, user.id)))
+    .returning({ id: notices.id });
+  return Boolean(row);
 }
 
 function actionsFromKind(kind: string, side: string | null): string[] {

@@ -367,3 +367,29 @@ How to restore: `docs/runbook-backup.md`.
 - **Likely to change:** the owner may later switch that last rule to "only when named on this order". It is one setting in `apps/api/src/engine/access.ts` (`PRIVATE_COMMENT_ROLES`).
 - **Enforced by the API, not just the screen** (like invariant 8). Hidden comments show as "Comment hidden". Order-level notes (the buyer's requirements, cancel reasons) are not affected.
 
+### D29 — Private messages, Phase 2 privacy, payment proof and PO per component (owner, 31 Oct 2026)
+**Status: DECIDED.** Replaces D28's Phase 1 comment rule. New orders use workflow template **v3**.
+
+**Private messages**
+- **The toggle:** every action (send, send back, confirm, approve, reject, complete, log, update) has a "Make this private" toggle. When it's on, the writer picks people and/or teams to share it with.
+- **Who sees a private action:**
+  - the writer;
+  - the people and teams tagged;
+  - everyone taking part in that step, so whoever gets the work back can read why;
+  - **always** the order's approvers and Head Approvers (they can't be removed), and Admin.
+- **Everyone else sees nothing at all,** not even that something happened. The step still shows who has it now.
+- **Notices:** tagged people (members of tagged teams included) and the approvers get a notice on My Work ("Shared with you"), kept until marked read. No action is needed.
+- **Reverts** are the same thing: a send-back or rejection with the toggle on.
+- **Phase 1 comments are visible to everyone who sees the order,** unless made private. This replaces D28.
+
+**Phase 2 privacy**
+- **Hidden from Marketing alone:** Phase 2 is hidden from people whose only part in it is Marketing. They see it as one line, have no Materials tab, and their history shows only "materials complete" (the gate passing).
+- **Still visible to:** anyone who is also in Materials, Design, Regulation or Production (e.g. Marketing + Design), approvers, Head Approvers and Admin.
+- **Tagging overrides it:** a private message that tags someone shows to them even inside the phase hidden from them.
+
+**Documents**
+- **Approvers and Head Approvers** open every document of their orders.
+- **Payment proof:** only Accounts, approvers, Head Approvers and Admin. Marketing and the Creator no longer can. When Accounts uploads one, the approvers get a notice.
+- **PO per component:** on the "Order raw material" and "Order packaging" steps, Materials uploads a **purchase order (PO)** for each component of that type. Every one is **required** before marking it ordered. POs open only for Materials, approvers, Head Approvers and Admin; this may widen later via `docAccess.PO`. The Materials table has a PO column.
+- **Enforced by the API everywhere:** order details, timeline, documents, file links and dashboards.
+

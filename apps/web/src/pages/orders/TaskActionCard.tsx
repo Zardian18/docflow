@@ -21,6 +21,7 @@ import { toast } from 'sonner';
 import { ReviewDocList } from '@/components/DocumentButtons';
 import { FileDropzone, type UploadState } from '@/components/FileDropzone';
 import { FormError } from '@/components/forms';
+import { PrivatePicker, type PrivateValue } from '@/components/PrivatePicker';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -34,6 +35,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { api, errorMessage } from '@/lib/api';
 import { waitedFor } from '@/lib/labels';
+import { ComponentPoList } from './ComponentPoList';
 
 const today = () => {
   const d = new Date();
@@ -135,6 +137,7 @@ export function TaskActionCard({
   const [toTeam, setToTeam] = useState<Team | ''>('');
   const [status, setStatus] = useState<ShipmentStatus>('IN_TRANSIT');
   const [problem, setProblem] = useState<string>();
+  const [privateTo, setPrivateTo] = useState<PrivateValue | null>(null);
 
   const stage =
     step.kind === 'APPROVAL_CHAIN' ? step.stages.find((s) => s.key === task.side) : undefined;
@@ -208,6 +211,14 @@ export function TaskActionCard({
       ...(needs.date ? { date } : {}),
       ...(needs.returnTeams.length && toTeam ? { toTeam } : {}),
       ...(action === 'CHECKPOINT' ? { shipmentStatus: status } : {}),
+      ...(privateTo
+        ? {
+            privateTo: {
+              employeeIds: privateTo.people.map((p) => p.id),
+              teams: privateTo.teams,
+            },
+          }
+        : {}),
     });
   };
 
@@ -235,6 +246,14 @@ export function TaskActionCard({
       </div>
 
       <ReviewDocList docs={task.reviewDocs} />
+
+      {step.kind === 'TASK' && step.needsComponentDoc && step.needsComponents && task.productId && (
+        <ComponentPoList
+          orderId={order.id}
+          productId={task.productId}
+          kind={step.needsComponents}
+        />
+      )}
 
       {docs.map((d) => (
         <div key={d.kind} className="flex flex-col gap-1.5">
@@ -416,6 +435,8 @@ export function TaskActionCard({
           onChange={(e) => setComment(e.target.value)}
         />
       </div>
+
+      <PrivatePicker value={privateTo} onChange={setPrivateTo} />
 
       <FormError message={problem ?? (act.error ? errorMessage(act.error) : undefined)} />
       <div className="flex flex-wrap gap-2">

@@ -167,6 +167,9 @@ export const api = {
       get(SlotAssignment.array(), `/v1/lookups/buyers/${id}/slots`, signal),
     buyers: (q: string, signal?: AbortSignal) =>
       get(BuyerOption.array(), `/v1/lookups/buyers?${listParams({ q })}`, signal),
+    /** Anyone active, to share a private message with (D29) */
+    everyone: (q: string, signal?: AbortSignal) =>
+      get(PersonOption.array(), `/v1/lookups/everyone?${listParams({ q })}`, signal),
   },
 
   orders: {
@@ -207,6 +210,9 @@ export const api = {
       request(`/v1/components/${id}?${listParams({ comment })}`, { method: 'DELETE' }),
     history: (id: string, signal?: AbortSignal) =>
       get(ComponentChange.array(), `/v1/components/${id}/history`, signal),
+    /** Attach the component's purchase order (D29) */
+    uploadPo: (id: string, uploadId: string) =>
+      request(`/v1/components/${id}/po`, { method: 'POST', body: { uploadId } }),
   },
 
   documents: {
@@ -220,6 +226,10 @@ export const api = {
 
   work: (query: WorkQuery, signal?: AbortSignal) =>
     get(WorkResponse, `/v1/work?${listParams(query)}`, signal),
+
+  notices: {
+    read: (id: string) => request(`/v1/notices/${id}/read`, { method: 'POST' }),
+  },
 
   uploads: {
     presign: (body: PresignRequest) =>

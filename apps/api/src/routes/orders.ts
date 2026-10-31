@@ -37,9 +37,14 @@ import {
   orderSlotPeople,
   tasks,
 } from '../db/schema.js';
-import { canSeeComponents, canSeeDoc } from '../engine/access.js';
+import { canSeeComponents } from '../engine/access.js';
 import { sinceClock } from '../engine/clock.js';
-import { addComponent, deleteComponent, updateComponent } from '../engine/components.js';
+import {
+  addComponent,
+  deleteComponent,
+  updateComponent,
+  uploadComponentPo,
+} from '../engine/components.js';
 import {
   act,
   cancelOrder,
@@ -48,8 +53,14 @@ import {
   replaceSlotPerson,
   updateOrderSlot,
 } from '../engine/engine.js';
-import { componentTables, orderDetail, orderTimeline, visibleCtx } from '../engine/views.js';
-import { myWork } from '../engine/work.js';
+import {
+  componentTables,
+  orderDetail,
+  orderTimeline,
+  privacyFor,
+  visibleCtx,
+} from '../engine/views.js';
+import { markNoticeRead, myWork } from '../engine/work.js';
 import { notFound } from '../errors.js';
 import { currentUser, requireUser } from '../plugins/auth.js';
 import type { StorageService } from '../storage/storage.js';
@@ -288,7 +299,8 @@ export const orderRoutes: FastifyPluginAsyncZod<RouteDeps & { storage: StorageSe
       const [doc] = await db.select().from(documents).where(eq(documents.id, request.params.id));
       if (!doc) throw notFound('Document');
       const ctx = await visibleCtx(db, user, doc.orderId);
-      if (!canSeeDoc(user, ctx, doc.kind)) throw notFound('Document');
+      // Kind, private audience and hidden phase, as everywhere else (D29)
+      if (!(await privacyFor(db, user, ctx)).seesDoc(doc)) throw notFound('Document');
       const inline =
         request.query.mode === 'view' &&
         (doc.fileMime === 'application/pdf' || doc.fileMime.startsWith('image/'));
@@ -402,5 +414,28 @@ export const orderRoutes: FastifyPluginAsyncZod<RouteDeps & { storage: StorageSe
     '/v1/work',
     { schema: { querystring: WorkQuery, response: { 200: WorkResponse } } },
     async (request) => myWork(db, currentUser(request), request.query),
+  );
+
+  // A notice on My Work, marked read (D29)
+  app.post('/v1/notices/:id/read', { schema: { params: IdParam } }, async (request, reply) => {
+    if (!(await markNoticeRead(db, currentUser(request), request.params.id))) {
+      throw notFound('Notice');
+    }
+    return reply.code(204).send();
+  });
+
+  // Materials attaches a component's purchase order (D29)
+  app.post(
+    '/v1/components/:id/po',
+    {
+      config: perUserLimit(limits.userActionsPerMinute),
+      schema: { params: IdParam, body: z.object({ uploadId: z.uuid() }) },
+    },
+    async (request, reply) => {
+      const user = currentUser(request);
+      await uploadComponentPo(db, storage, user, request.params.id, request.body.uploadId);
+      request.log.info({ componentId: request.params.id, actorId: user.id }, 'component PO');
+      return reply.code(204).send();
+    },
   );
 };
