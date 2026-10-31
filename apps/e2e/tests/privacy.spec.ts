@@ -101,3 +101,42 @@ test('the new pieces fit a phone screen (375px)', async ({ browser }) => {
     await context.close();
   }
 });
+
+test('Purchase orders in the Chain tab: Materials attaches, Approvers view, nobody else (D30)', async ({
+  browser,
+}) => {
+  const area = (page: Page) =>
+    page.getByRole('region', { name: /Purchase orders for each component/ });
+  // Materials: every component of every product, each with its PO and an upload area
+  const kabir = await signedIn(browser, 'kabir');
+  await openOrder(kabir.page, ORDERS.delivery);
+  await expect(area(kabir.page)).toBeVisible();
+  await expect(area(kabir.page).getByText('PO uploaded').first()).toBeVisible();
+  await expect(
+    area(kabir.page)
+      .getByText(/Drop the PO for|Replace the PO for/)
+      .first(),
+  ).toBeVisible();
+  await expectAccessible(kabir.page, 'purchase orders');
+  await kabir.context.close();
+  // An approver: sees and opens them (and the Materials tab), can't upload
+  const priya = await signedIn(browser, 'priya');
+  await openOrder(priya.page, ORDERS.delivery);
+  await expect(
+    area(priya.page).getByRole('button', { name: 'View Purchase order (PO)' }).first(),
+  ).toBeVisible();
+  await expect(area(priya.page).getByText(/Drop the PO for/)).toHaveCount(0);
+  await expect(priya.page.getByRole('tab', { name: 'Materials' })).toBeVisible();
+  await priya.context.close();
+  // Admin and Marketing: no purchase orders at all
+  for (const [who, ref] of [
+    ['admin', ORDERS.delivery],
+    ['rohan', ORDERS.qa],
+  ] as const) {
+    const s = await signedIn(browser, who);
+    await openOrder(s.page, ref);
+    await expect(s.page.getByText('Phase 1 · Sales and PI')).toBeVisible();
+    await expect(area(s.page)).toHaveCount(0);
+    await s.context.close();
+  }
+});

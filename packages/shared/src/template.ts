@@ -148,6 +148,8 @@ export type DataGateCondition = 'ALL_COMPONENTS_DELIVERED' | 'ALL_COMPONENTS_COM
 export interface DataGateStep extends StepBase {
   kind: 'DATA_GATE';
   condition: DataGateCondition;
+  /** ...and every component has this document too, e.g. its PO (D30) */
+  needsComponentDoc?: DocKind;
 }
 
 export interface CheckpointLogStep extends StepBase {
@@ -186,6 +188,8 @@ export interface Template {
    * teams in docAccess, approvers, Head Approvers and Admin open them (D29).
    */
   docsByAccessOnly: DocKind[];
+  /** Kinds Admin doesn't open either: only their teams, Approvers and Head Approvers (D30) */
+  docsHiddenFromAdmin: DocKind[];
   /**
    * A phase hidden from people whose only part in it is Marketing (D29): they see it as one line,
    * no component tables, and in the history only the reveal steps' completion. Anyone also in
@@ -549,6 +553,7 @@ export const EXPORT_ORDER_V1: Template = {
     PO: ['MATERIALS'],
   },
   docsByAccessOnly: ['PAYMENT_PROOF', 'PO'],
+  docsHiddenFromAdmin: ['PO'],
   phasePrivacy: {
     phase: 2,
     involvedTeams: ['MATERIALS', 'DESIGN', 'REGULATION', 'PRODUCTION'],
@@ -600,7 +605,9 @@ export const EXPORT_ORDER_V3: Template = {
   ...EXPORT_ORDER_V2,
   version: 3,
   steps: EXPORT_ORDER_V2.steps.map((step): StepDef =>
-    step.kind === 'TASK' && step.needsComponents ? { ...step, needsComponentDoc: 'PO' } : step,
+    (step.kind === 'TASK' && step.needsComponents) || step.kind === 'DATA_GATE'
+      ? { ...step, needsComponentDoc: 'PO' }
+      : step,
   ),
 };
 

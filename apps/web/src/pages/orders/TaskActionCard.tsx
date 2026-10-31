@@ -250,6 +250,7 @@ export function TaskActionCard({
       {step.kind === 'TASK' && step.needsComponentDoc && step.needsComponents && task.productId && (
         <ComponentPoList
           orderId={order.id}
+          canUpload={order.poAccess === 'UPLOAD'}
           productId={task.productId}
           kind={step.needsComponents}
         />

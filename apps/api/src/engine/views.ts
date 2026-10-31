@@ -408,6 +408,11 @@ export async function orderDetail(db: Db, user: AuthUser, orderId: string): Prom
     canRename: canRename(user, ctx),
     editableSlots: canEditChain(user, ctx) ? editableSlots(ctx) : [],
     hiddenPhases: privacy.hiddenPhases,
+    poAccess: !canSeeDoc(user, ctx, 'PO')
+      ? 'NONE'
+      : canEditComponents(user, ctx)
+        ? 'UPLOAD'
+        : 'VIEW',
   };
 }
 

@@ -13,6 +13,7 @@ import {
 } from '@docflow/shared';
 import { Check, Circle, CircleDot, Clock3, CornerDownLeft, X } from 'lucide-react';
 import { PrivateBadge } from '@/components/PrivateBadge';
+import { ComponentPoList } from './ComponentPoList';
 import { StatusPill } from '@/components/StatusPill';
 import { formatDateTime } from '@/lib/format';
 import { days, PHASE_LABEL, waitedFor } from '@/lib/labels';
@@ -262,6 +263,13 @@ export function ChainView({ order, template }: { order: OrderDetail; template: T
             <h3 id={`phase-${phase}`} className="mb-4 text-sm font-semibold">
               {PHASE_LABEL[phase]}
             </h3>
+            {/* Purchase orders, one per component: Materials attaches, approvers view (D30) */}
+            {phase === 2 && order.poAccess !== 'NONE' && order.canSeeComponents && (
+              <div className="bg-surface-subtle mb-5 rounded-lg border p-3 sm:p-4">
+                <h4 className="mb-2 text-[13px] font-semibold">Purchase orders</h4>
+                <ComponentPoList orderId={order.id} canUpload={order.poAccess === 'UPLOAD'} />
+              </div>
+            )}
             <ol className="flex flex-col gap-5">
               {template.steps
                 .filter((s) => s.phase === phase)
