@@ -57,6 +57,15 @@ describe.skipIf(!TEST_DB_URL)('private messages, Phase 2 privacy, payment proof 
       capabilities: ['MARKETING'],
     });
     as.mira = await new Client(app).login('mira@t.co');
+    // An Approver by role, not named on any order, and Marketing + Approver at once (D30)
+    await createEmployee(db, { name: 'Ravi Role', email: 'ravi@t.co', capabilities: ['APPROVER'] });
+    as.ravi = await new Client(app).login('ravi@t.co');
+    await createEmployee(db, {
+      name: 'Mohan Mix',
+      email: 'mohan@t.co',
+      capabilities: ['MARKETING', 'HEAD_APPROVER'],
+    });
+    as.mohan = await new Client(app).login('mohan@t.co');
   }, 180_000);
   afterAll(async () => {
     await app.close();
@@ -211,5 +220,95 @@ describe.skipIf(!TEST_DB_URL)('private messages, Phase 2 privacy, payment proof 
         who,
       ).toBe(true);
     }
+  });
+
+  it('Approvers and Head Approvers see everything, by role (D30)', async () => {
+    const { rows } = await db.execute<{ n: number }>(sql`select count(*)::int as n from orders`);
+    for (const who of ['ravi', 'mohan']) {
+      const list = (await as[who]!.get('/v1/orders?pageSize=50')).json();
+      expect(list.total, who).toBe(rows[0]!.n);
+    }
+    const qa = await orderId('TPE/PI/26-27/0045');
+    for (const who of ['ravi', 'mohan']) {
+      const d = await detail(who, qa);
+      expect(d, who).toMatchObject({ hiddenPhases: [], canSeeComponents: true, poAccess: 'VIEW' });
+      expect(
+        d.tasks.some((t) => t.phase === 2),
+        who,
+      ).toBe(true);
+      const tables = (await as[who]!.get(`/v1/orders/${qa}/components`)).json();
+      const po = tables.products[0].components[0].po;
+      expect(po, who).toMatchObject({ kind: 'PO' });
+      expect((await as[who]!.get(`/v1/documents/${po.id}/file`)).statusCode, who).toBe(200);
+    }
+    // The secret send-back from earlier: approvers by role read it too
+    const loops = await orderId('TPE/PI/26-27/0043');
+    expect((await timeline('ravi', loops)).some((e) => e.comment === secret)).toBe(true);
+    // Admin sees the order but not the POs
+    const admin = await detail('admin', qa);
+    expect(admin.poAccess).toBe('NONE');
+    const adminTables = (await as.admin!.get(`/v1/orders/${qa}/components`)).json();
+    expect(adminTables.products[0].components[0]).toMatchObject({ po: null, hasPo: true });
+  });
+
+  it('Materials can attach POs, and nothing goes to Production until every component has one', async () => {
+    const delivery = await orderId('THC/PI/26-27/0044');
+    expect((await detail('kabir', delivery)).poAccess).toBe('UPLOAD');
+    // A component added late, complete in every field but without its PO
+    const product = (await detail('kabir', delivery)).products[0]!;
+    const today = new Date().toISOString().slice(0, 10);
+    const added = await as.kabir!.post(`/v1/orders/${delivery}/products/${product.id}/components`, {
+      name: 'Desiccant sachet',
+      kind: 'PACKAGING',
+      poDate: today,
+      dispatchDate: today,
+      deliverDate: today,
+      challanNo: 'CH-1',
+      lrDetails: 'LR-1',
+    });
+    expect(added.statusCode, added.body).toBe(201);
+    const late = added.json().id as string;
+    // Deliver the one component still on the way
+    let tables = (await as.kabir!.get(`/v1/orders/${delivery}/components`)).json();
+    const waiting = tables.products
+      .flatMap((p: { components: Array<Record<string, unknown>> }) => p.components)
+      .find((c: { status: string }) => c.status === 'DISPATCHED');
+    const put = await as.kabir!.put(`/v1/components/${waiting.id}`, {
+      ...waiting,
+      deliverDate: today,
+      comment: null,
+    });
+    expect(put.statusCode, put.body).toBe(204);
+    const gate = async () =>
+      (await detail('admin', delivery)).tasks.find((t) => t.stepKey === 'materials_delivered')!
+        .status;
+    expect(await gate()).toBe('OPEN');
+    // Only Materials attaches POs
+    const presign = async (who: string) => {
+      const res = await as[who]!.post('/v1/uploads/presign', {
+        fileName: 'po.pdf',
+        contentType: PDF,
+        size: pdf.length,
+      });
+      const { uploadId } = res.json();
+      const r = await db.execute<{ object_key: string }>(
+        sql`select object_key from uploads where id = ${uploadId}`,
+      );
+      storage.upload(r.rows[0]!.object_key, pdf, PDF);
+      return uploadId as string;
+    };
+    expect(
+      (await as.ravi!.post(`/v1/components/${late}/po`, { uploadId: await presign('ravi') }))
+        .statusCode,
+    ).toBe(403);
+    const ok = await as.kabir!.post(`/v1/components/${late}/po`, {
+      uploadId: await presign('kabir'),
+    });
+    expect(ok.statusCode, ok.body).toBe(204);
+    expect(await gate()).toBe('DONE');
+    tables = (await as.kabir!.get(`/v1/orders/${delivery}/components`)).json();
+    expect(tables.products[0].components.find((c: { id: string }) => c.id === late).hasPo).toBe(
+      true,
+    );
   });
 });

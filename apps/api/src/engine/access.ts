@@ -23,9 +23,15 @@ export function currentPhase(ctx: OrderCtx): 1 | 2 | 3 {
 const isNamed = (user: Pick<AuthUser, 'id'>, ctx: OrderCtx) =>
   [...ctx.slots.values()].some((ids) => ids.includes(user.id)) || ctx.order.createdBy === user.id;
 
-/** Approvers and Head Approvers on this order (any approval): they see everything (D29) */
-export const isApprover = (user: Pick<AuthUser, 'id'>, ctx: OrderCtx) =>
-  APPROVER_SLOTS.some((s) => (ctx.slots.get(s) ?? []).includes(user.id));
+/**
+ * Approvers and Head Approvers see everything (D30): every order, every phase, the component
+ * tables, every document and private message. By role, not only on the orders they're named on.
+ */
+export const isApprover = (user: Pick<AuthUser, 'id' | 'capabilities'>, ctx: OrderCtx) =>
+  hasApproverRole(user) || APPROVER_SLOTS.some((s) => (ctx.slots.get(s) ?? []).includes(user.id));
+
+export const hasApproverRole = (user: Pick<AuthUser, 'capabilities'>) =>
+  user.capabilities.includes('APPROVER') || user.capabilities.includes('HEAD_APPROVER');
 
 /** A private message's members, as stored (D29) */
 export interface AudienceMembers {
@@ -78,7 +84,10 @@ export function visibleTeams(user: Pick<AuthUser, 'teams'>, ctx: OrderCtx): Team
 /** Admin sees every order; named people see theirs; teams from the phase they join (§4.8) */
 export function canSeeOrder(user: Pick<AuthUser, 'id' | 'teams' | 'capabilities'>, ctx: OrderCtx) {
   return (
-    user.capabilities.includes('ADMIN') || isNamed(user, ctx) || visibleTeams(user, ctx).length > 0
+    user.capabilities.includes('ADMIN') ||
+    hasApproverRole(user) ||
+    isNamed(user, ctx) ||
+    visibleTeams(user, ctx).length > 0
   );
 }
 
@@ -88,7 +97,9 @@ export function canSeeDoc(
   ctx: OrderCtx,
   kind: DocKind,
 ) {
-  if (user.capabilities.includes('ADMIN') || isApprover(user, ctx)) return true;
+  if (isApprover(user, ctx)) return true;
+  // Admin opens everything except the kinds kept to their teams and the approvers (D30: POs)
+  if (user.capabilities.includes('ADMIN')) return !ctx.template.docsHiddenFromAdmin.includes(kind);
   // Named people open every document, except the kinds kept to their teams (D29)
   if (isNamed(user, ctx) && !ctx.template.docsByAccessOnly.includes(kind)) return true;
   const allowed = ctx.template.docAccess[kind];

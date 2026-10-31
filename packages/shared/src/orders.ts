@@ -255,6 +255,8 @@ export const OrderDetail = OrderSummary.extend({
   editableSlots: z.array(Slot),
   /** Phases this person sees only as one line (D29: Phase 2 for Marketing alone) */
   hiddenPhases: z.array(z.number().int()),
+  /** Purchase orders (D30): Materials attaches them while the tables are open; approvers view */
+  poAccess: z.enum(['NONE', 'VIEW', 'UPLOAD']),
 });
 export type OrderDetail = z.infer<typeof OrderDetail>;
 

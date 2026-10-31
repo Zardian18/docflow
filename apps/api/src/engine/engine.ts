@@ -416,10 +416,24 @@ async function gateSatisfied(tx: Tx, ctx: OrderCtx, step: StepDef) {
     .select()
     .from(orderComponents)
     .where(eq(orderComponents.orderId, ctx.order.id));
+  // Components with the document the gate asks for, e.g. their PO (D30)
+  const withDoc = step.needsComponentDoc
+    ? new Set(
+        (
+          await tx
+            .select({ componentId: documents.componentId })
+            .from(documents)
+            .where(
+              and(eq(documents.orderId, ctx.order.id), eq(documents.kind, step.needsComponentDoc)),
+            )
+        ).map((d) => d.componentId),
+      )
+    : null;
   const ready = (r: (typeof rows)[number]) =>
-    step.condition === 'ALL_COMPONENTS_DELIVERED'
+    (step.condition === 'ALL_COMPONENTS_DELIVERED'
       ? r.deliverDate !== null
-      : COMPONENT_REQUIRED_FIELDS.every((f) => r[f] !== null);
+      : COMPONENT_REQUIRED_FIELDS.every((f) => r[f] !== null)) &&
+    (!withDoc || withDoc.has(r.id));
   return (
     ctx.products.length > 0 &&
     ctx.products.every((p) => rows.some((r) => r.productId === p.id)) &&

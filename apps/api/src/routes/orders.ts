@@ -74,7 +74,13 @@ const FILE_LINK_SECONDS = 5 * 60;
  * order reaches the phase their team joins in. Uses the current template's phases.
  */
 function visibleTo(user: AuthUser): SQL | undefined {
-  if (user.capabilities.includes('ADMIN')) return undefined;
+  // Admin, Approvers and Head Approvers see every order (D30)
+  if (
+    user.capabilities.includes('ADMIN') ||
+    user.capabilities.includes('APPROVER') ||
+    user.capabilities.includes('HEAD_APPROVER')
+  )
+    return undefined;
   const named = sql`(${orders.createdBy} = ${user.id} or exists (
     select 1 from ${orderSlotPeople} s where s.order_id = ${orders.id} and s.employee_id = ${user.id}))`;
   const phases = user.teams.map((t: Team) => CURRENT_TEMPLATE.teamVisibleFrom[t]);

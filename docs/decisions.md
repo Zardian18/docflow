@@ -393,3 +393,11 @@ How to restore: `docs/runbook-backup.md`.
 - **PO per component:** on the "Order raw material" and "Order packaging" steps, Materials uploads a **purchase order (PO)** for each component of that type. Every one is **required** before marking it ordered. POs open only for Materials, approvers, Head Approvers and Admin; this may widen later via `docAccess.PO`. The Materials table has a PO column.
 - **Enforced by the API everywhere:** order details, timeline, documents, file links and dashboards.
 
+### D30 — Approvers see everything; PO area in the Chain tab; POs block progress (owner, 31 Oct 2026)
+**Status: DECIDED.** Corrects D29.
+- **Approvers and Head Approvers see everything, by role.** Anyone holding Approver or Head Approver sees every order, every phase (Phase 2 and the Materials tab included), every document (POs and payment proof included) and every private message, whether or not they are named on that order. D29 counted only the approvers named on the order, so an approver who was also that order's Marketing person, or not on it at all, lost Phase 2. Dashboard notices still go only to the approvers named on the order.
+- **POs are for Materials and the approvers only:** not Admin, not Marketing, not the Creator, not other teams.
+- **PO area in the Chain tab:** Phase 2 has a **Purchase orders** area listing every component of every product. Materials attaches each one's PO there (or on the ordering step); approvers view them.
+- **POs gate progress:** "Raw material ordered" / "Packaging ordered" need every component of that type to have its PO, and **Materials complete** (the hand-over to Production) needs every component to have one, including components added later.
+- **Running orders upgraded:** unfinished v2 orders move to workflow v3 (migration 0014), which differs from v2 only by the PO rule. This is a deliberate exception to invariant 1, asked for by the owner. Finished orders keep v2.
+
