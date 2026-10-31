@@ -371,6 +371,65 @@ export const holderIntervals = pgTable(
   ],
 );
 
+/**
+ * A private message's audience (D29): the people and teams it was shared with, plus the step's
+ * own actors and the writer, fixed when written. Approvers, Head Approvers and Admin always see
+ * private messages too (checked when reading, not stored).
+ */
+export const audiences = pgTable(
+  'audiences',
+  {
+    id: id(),
+    orderId: uuid('order_id')
+      .notNull()
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => employees.id),
+    createdAt: createdAt(),
+  },
+  (t) => [index('audiences_order_idx').on(t.orderId)],
+);
+
+export const audienceMembers = pgTable(
+  'audience_members',
+  {
+    id: id(),
+    audienceId: uuid('audience_id')
+      .notNull()
+      .references(() => audiences.id, { onDelete: 'cascade' }),
+    employeeId: uuid('employee_id').references(() => employees.id),
+    team: teamEnum('team'),
+    // Tagged by the writer (shown as "shared with"), or added because they take part
+    tagged: boolean('tagged').notNull().default(false),
+  },
+  (t) => [index('audience_members_audience_idx').on(t.audienceId)],
+);
+
+export const noticeKindEnum = pgEnum('notice_kind', ['PRIVATE_MESSAGE', 'PAYMENT_PROOF']);
+
+/** Something shared with one person, on their dashboard until read (D29) */
+export const notices = pgTable(
+  'notices',
+  {
+    id: id(),
+    orderId: uuid('order_id')
+      .notNull()
+      .references(() => orders.id, { onDelete: 'cascade' }),
+    employeeId: uuid('employee_id')
+      .notNull()
+      .references(() => employees.id),
+    kind: noticeKindEnum('kind').notNull(),
+    taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
+    title: text('title').notNull(),
+    actorId: uuid('actor_id').references(() => employees.id),
+    comment: text('comment'),
+    createdAt: createdAt(),
+    readAt: timestamp('read_at', { withTimezone: true }),
+  },
+  (t) => [index('notices_employee_idx').on(t.employeeId, t.readAt)],
+);
+
 export const voteEnum = pgEnum('vote', ['APPROVE', 'REJECT']);
 
 export const approvalVotes = pgTable(
@@ -387,6 +446,7 @@ export const approvalVotes = pgTable(
       .references(() => employees.id),
     vote: voteEnum('vote').notNull(),
     comment: text('comment'),
+    audienceId: uuid('audience_id').references(() => audiences.id),
     createdAt: happenedAt('created_at'),
   },
   (t) => [uniqueIndex('approval_votes_once').on(t.taskId, t.run, t.stage, t.employeeId)],
@@ -414,10 +474,12 @@ export const channelRounds = pgTable(
     submittedBy: uuid('submitted_by').references(() => employees.id),
     submittedAt: timestamp('submitted_at', { withTimezone: true }),
     submitComment: text('submit_comment'),
+    submitAudienceId: uuid('submit_audience_id').references(() => audiences.id),
     verdict: verdictEnum('verdict'),
     verdictBy: uuid('verdict_by').references(() => employees.id),
     verdictAt: timestamp('verdict_at', { withTimezone: true }),
     verdictComment: text('verdict_comment'),
+    verdictAudienceId: uuid('verdict_audience_id').references(() => audiences.id),
     // Production QA: which team the work went back to
     returnedToTeam: teamEnum('returned_to_team'),
   },
@@ -438,6 +500,11 @@ export const documents = pgTable(
       .references(() => orders.id, { onDelete: 'cascade' }),
     taskId: uuid('task_id').references(() => tasks.id, { onDelete: 'set null' }),
     roundId: uuid('round_id').references(() => channelRounds.id, { onDelete: 'set null' }),
+    // A component's PO (D29)
+    componentId: uuid('component_id').references(() => orderComponents.id, {
+      onDelete: 'set null',
+    }),
+    audienceId: uuid('audience_id').references(() => audiences.id),
     kind: docKindEnum('kind').notNull(),
     fileKey: text('file_key').notNull(),
     fileName: text('file_name').notNull(),
@@ -475,6 +542,7 @@ export const payments = pgTable(
       .references(() => employees.id),
     verifiedAt: happenedAt('verified_at'),
     comment: text('comment'),
+    audienceId: uuid('audience_id').references(() => audiences.id),
   },
   (t) => [index('payments_order_idx').on(t.orderId)],
 );
@@ -546,6 +614,7 @@ export const shipmentCheckpoints = pgTable(
       .notNull()
       .references(() => employees.id),
     loggedAt: happenedAt('logged_at'),
+    audienceId: uuid('audience_id').references(() => audiences.id),
   },
   (t) => [index('shipment_checkpoints_order_idx').on(t.orderId, t.loggedAt)],
 );
@@ -568,6 +637,7 @@ export const orderEvents = pgTable(
     actingAs: text('acting_as'),
     type: text('type').notNull(),
     comment: text('comment'),
+    audienceId: uuid('audience_id'),
     details: jsonb('details').notNull().default({}),
     createdAt: happenedAt('created_at'),
   },

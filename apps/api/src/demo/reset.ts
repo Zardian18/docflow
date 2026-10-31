@@ -22,6 +22,9 @@ const WIPED = [
   'buyers',
   'buyer_slot_people',
   'buyer_slot_gates',
+  'notices',
+  'audience_members',
+  'audiences',
 ] as const;
 
 export interface ResetPlan {

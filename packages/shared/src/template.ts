@@ -22,6 +22,7 @@ export const DOC_KINDS = [
   'INVOICE',
   'PAYMENT_PROOF',
   'BOL',
+  'PO',
 ] as const;
 export const DocKind = z.enum(DOC_KINDS);
 export type DocKind = z.infer<typeof DocKind>;
@@ -36,6 +37,7 @@ export const DOC_KIND_LABEL: Record<DocKind, string> = {
   INVOICE: 'Invoice',
   PAYMENT_PROOF: 'Payment proof',
   BOL: 'Bill of Lading',
+  PO: 'Purchase order (PO)',
 };
 
 /** The separate back-and-forth channels, each queryable on its own (brief, cross-cutting 2). */
@@ -96,6 +98,8 @@ export interface TaskStep extends StepBase {
   paymentKind?: 'ADVANCE' | 'BALANCE';
   /** Completing needs at least one component of this type for the task's product (D27) */
   needsComponents?: Tag;
+  /** ...and every one of those components needs this document attached, e.g. its PO (D29) */
+  needsComponentDoc?: DocKind;
 }
 
 export interface ReviewLoopStep extends StepBase {
@@ -178,10 +182,16 @@ export interface Template {
   /** From which phase a team can see an order (and its component tables) */
   teamVisibleFrom: Record<Team, 1 | 2 | 3>;
   /**
-   * Comments on steps of these phases are hidden from people who see the order only through
-   * these teams (D28). They still see the steps, who acted and when.
+   * Document kinds that named people (other than approvers) don't get automatically: only the
+   * teams in docAccess, approvers, Head Approvers and Admin open them (D29).
    */
-  commentPrivacy: { phases: Array<1 | 2 | 3>; hiddenFromTeams: Team[] };
+  docsByAccessOnly: DocKind[];
+  /**
+   * A phase hidden from people whose only part in it is Marketing (D29): they see it as one line,
+   * no component tables, and in the history only the reveal steps' completion. Anyone also in
+   * one of `involvedTeams`, approvers, Head Approvers and Admin see it in full.
+   */
+  phasePrivacy: { phase: 1 | 2 | 3; involvedTeams: Team[]; revealSteps: string[] } | null;
   /** Materials can edit component rows until this step is done */
   componentsEditableUntil: string;
 }
@@ -536,10 +546,13 @@ export const EXPORT_ORDER_V1: Template = {
     INVOICE: ['LOGISTICS', 'ACCOUNTS'],
     PAYMENT_PROOF: ['ACCOUNTS'],
     BOL: ['LOGISTICS', 'ACCOUNTS'],
+    PO: ['MATERIALS'],
   },
-  commentPrivacy: {
-    phases: [1],
-    hiddenFromTeams: ['REGULATION', 'DESIGN', 'MATERIALS', 'LOGISTICS'],
+  docsByAccessOnly: ['PAYMENT_PROOF', 'PO'],
+  phasePrivacy: {
+    phase: 2,
+    involvedTeams: ['MATERIALS', 'DESIGN', 'REGULATION', 'PRODUCTION'],
+    revealSteps: ['materials_delivered'],
   },
   teamVisibleFrom: {
     ACCOUNTS: 1,
@@ -582,8 +595,17 @@ export const EXPORT_ORDER_V2: Template = {
   }),
 };
 
-export const TEMPLATES: Template[] = [EXPORT_ORDER_V1, EXPORT_ORDER_V2];
-export const CURRENT_TEMPLATE = EXPORT_ORDER_V2;
+/** v3 (D29): every component needs its purchase order (PO) uploaded before "ordered". */
+export const EXPORT_ORDER_V3: Template = {
+  ...EXPORT_ORDER_V2,
+  version: 3,
+  steps: EXPORT_ORDER_V2.steps.map((step): StepDef =>
+    step.kind === 'TASK' && step.needsComponents ? { ...step, needsComponentDoc: 'PO' } : step,
+  ),
+};
+
+export const TEMPLATES: Template[] = [EXPORT_ORDER_V1, EXPORT_ORDER_V2, EXPORT_ORDER_V3];
+export const CURRENT_TEMPLATE = EXPORT_ORDER_V3;
 
 export function findTemplate(key: string, version: number): Template {
   const t = TEMPLATES.find((x) => x.key === key && x.version === version);

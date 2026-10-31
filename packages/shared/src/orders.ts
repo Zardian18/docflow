@@ -156,6 +156,9 @@ export const OrderDocument = z.object({
   uploadedAt: Instant,
   taskId: z.uuid().nullable(),
   roundId: z.uuid().nullable(),
+  /** A component's PO (D29) */
+  componentId: z.uuid().nullable(),
+  privateTo: z.array(z.string()).nullable(),
 });
 export type OrderDocument = z.infer<typeof OrderDocument>;
 
@@ -173,8 +176,9 @@ export const ChannelRound = z.object({
   verdictAt: Instant.nullable(),
   verdictComment: z.string().nullable(),
   returnedToTeam: Team.nullable(),
-  /** The comments exist but this person may not read them (D28) */
-  commentsHidden: z.boolean(),
+  /** Private submission / verdict: who it is shared with (D29); null when not private */
+  submitPrivateTo: z.array(z.string()).nullable(),
+  verdictPrivateTo: z.array(z.string()).nullable(),
 });
 export type ChannelRound = z.infer<typeof ChannelRound>;
 
@@ -185,7 +189,7 @@ export const ApprovalVote = z.object({
   employeeName: z.string(),
   vote: z.enum(['APPROVE', 'REJECT']),
   comment: z.string().nullable(),
-  commentHidden: z.boolean(),
+  privateTo: z.array(z.string()).nullable(),
   at: Instant,
 });
 export type ApprovalVote = z.infer<typeof ApprovalVote>;
@@ -200,6 +204,7 @@ export const Payment = z.object({
   verifiedByName: z.string(),
   verifiedAt: Instant,
   comment: z.string().nullable(),
+  privateTo: z.array(z.string()).nullable(),
 });
 export type Payment = z.infer<typeof Payment>;
 
@@ -210,6 +215,7 @@ export const Checkpoint = z.object({
   happenedOn: LocalDate,
   loggedByName: z.string(),
   loggedAt: Instant,
+  privateTo: z.array(z.string()).nullable(),
 });
 export type Checkpoint = z.infer<typeof Checkpoint>;
 
@@ -247,6 +253,8 @@ export const OrderDetail = OrderSummary.extend({
   canRename: z.boolean(),
   /** Approval slots Marketing can still change for this order: their stage hasn't started */
   editableSlots: z.array(Slot),
+  /** Phases this person sees only as one line (D29: Phase 2 for Marketing alone) */
+  hiddenPhases: z.array(z.number().int()),
 });
 export type OrderDetail = z.infer<typeof OrderDetail>;
 
@@ -284,6 +292,16 @@ export const PaymentInput = z.object({
 });
 export type PaymentInput = z.input<typeof PaymentInput>;
 
+/**
+ * A private message (D29): only these people and teams see it, plus, always, the order's
+ * approvers and Head Approvers, the writer, whoever the step goes to, and Admin.
+ */
+export const PrivateTo = z.object({
+  employeeIds: z.array(z.uuid()).max(50).default([]),
+  teams: z.array(Team).max(6).default([]),
+});
+export type PrivateTo = z.input<typeof PrivateTo>;
+
 /** One body for every task action; the engine checks which fields each step needs. */
 export const TaskActionRequest = z.object({
   action: TaskAction,
@@ -303,6 +321,8 @@ export const TaskActionRequest = z.object({
   /** Production QA returns: which team gets it back */
   toTeam: Team.optional(),
   shipmentStatus: ShipmentStatus.optional(),
+  /** Present: the action and its comment are private to this audience (D29) */
+  privateTo: PrivateTo.optional(),
 });
 export type TaskActionRequest = z.input<typeof TaskActionRequest>;
 
@@ -374,11 +394,28 @@ export const WorkQuery = z.object({
 });
 export type WorkQuery = z.input<typeof WorkQuery>;
 
+/** Something shared with this person, shown on My Work until marked read (D29) */
+export const Notice = z.object({
+  id: z.uuid(),
+  kind: z.enum(['PRIVATE_MESSAGE', 'PAYMENT_PROOF']),
+  orderId: z.uuid(),
+  orderRef: z.string(),
+  buyerName: z.string(),
+  taskId: z.uuid().nullable(),
+  title: z.string(),
+  actorName: z.string().nullable(),
+  comment: z.string().nullable(),
+  at: Instant,
+});
+export type Notice = z.infer<typeof Notice>;
+
 export const WorkResponse = z.object({
   items: z.array(WorkItem),
   /** Counts per tab, unfiltered */
   tabs: z.array(z.object({ tab: z.string(), label: z.string(), count: z.number().int() })),
   buyers: z.array(z.object({ id: z.uuid(), name: z.string() })),
+  /** Unread messages and files shared with this person (D29) */
+  notices: z.array(Notice),
 });
 export type WorkResponse = z.infer<typeof WorkResponse>;
 
@@ -469,6 +506,11 @@ export const Component = z.object({
   deliveryDays: DayCount,
   /** Fields still needed before Materials can hand over to Production (D27) */
   missing: z.array(z.enum(COMPONENT_FIELDS)),
+  /** The latest PO for this component, when this person may open it (D29) */
+  po: z
+    .object({ id: z.uuid(), kind: DocKind, fileName: z.string(), fileMime: z.string() })
+    .nullable(),
+  hasPo: z.boolean(),
   /** The latest reason Materials gave for a change to this row (D28) */
   note: z.object({ text: z.string(), byName: z.string(), at: Instant }).nullable(),
   delivered: z.boolean(),
@@ -531,8 +573,8 @@ export const OrderEvent = z.object({
   actorName: z.string().nullable(),
   actingAs: z.string().nullable(),
   comment: z.string().nullable(),
-  /** The comment exists but this person may not read it (D28) */
-  commentHidden: z.boolean(),
+  /** A private message: who it is shared with (D29); null when everyone may see it */
+  privateTo: z.array(z.string()).nullable(),
   details: z.record(z.string(), z.unknown()),
   at: Instant,
 });

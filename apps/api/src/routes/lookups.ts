@@ -39,6 +39,30 @@ export const lookupRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db }
         .limit(20),
   );
 
+  // Anyone active, to share a private message with (D29); any signed-in person may tag
+  app.get(
+    '/v1/lookups/everyone',
+    {
+      onRequest: requireUser,
+      schema: {
+        querystring: z.object({ q: z.string().trim().max(100).default('') }),
+        response: { 200: PersonOption.array() },
+      },
+    },
+    async ({ query }) =>
+      db
+        .select({ id: employees.id, name: employees.name, email: employees.email })
+        .from(employees)
+        .where(
+          and(
+            eq(employees.isActive, true),
+            query.q ? sql`lower(${employees.name}) like ${prefixPattern(query.q)}` : undefined,
+          ),
+        )
+        .orderBy(asc(sql`lower(${employees.name})`))
+        .limit(20),
+  );
+
   // The buyer's default chain, to start a new order from (Marketing, Q61, D27)
   app.get(
     '/v1/lookups/buyers/:id/slots',

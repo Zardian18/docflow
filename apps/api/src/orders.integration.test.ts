@@ -274,36 +274,14 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
     expect(docKinds).not.toContain('PI_FULL');
   });
 
-  it('hides Phase 1 comments from Regulation, Design, Materials and Logistics alone (D28)', async () => {
-    type Seen = Awaited<ReturnType<typeof detail>>;
-    const cbmReturn = (d: Seen) =>
-      d.rounds.find((r) => r.channel === 'CBM' && r.verdict === 'RETURNED')!;
-    const piReject = (d: Seen) => d.votes.find((v) => v.vote === 'REJECT')!;
-    for (const who of ['reg', 'mat', 'design', 'logi']) {
+  it('Phase 1 comments are visible to everyone who sees the order, unless private (D29)', async () => {
+    for (const who of ['reg', 'mat', 'design', 'logi', 'acc', 'creator', 'admin']) {
       const d = await detail(who);
-      // The chain is there, the words aren't
-      expect(cbmReturn(d)).toMatchObject({
-        verdictByName: 'mkt',
-        verdictComment: null,
-        commentsHidden: true,
-      });
-      expect(piReject(d)).toMatchObject({ comment: null, commentHidden: true });
-      const events = (await as[who]!.get(`/v1/orders/${orderId}/timeline`)).json();
-      const returned = events.find(
-        (e: { type: string; stepKey: string }) => e.type === 'RETURNED' && e.stepKey === 'cbm',
-      );
-      expect(returned).toMatchObject({ actorName: 'mkt', comment: null, commentHidden: true });
-    }
-    // Another team or a named role is enough; Admin and the people on the order always see them
-    for (const who of ['multi', 'regAppr', 'acc', 'creator', 'admin']) {
-      const d = await detail(who);
-      expect(cbmReturn(d)).toMatchObject({
-        verdictComment: 'Use 40ft containers',
-        commentsHidden: false,
-      });
-      expect(piReject(d)).toMatchObject({
+      const ret = d.rounds.find((r) => r.channel === 'CBM' && r.verdict === 'RETURNED')!;
+      expect(ret).toMatchObject({ verdictComment: 'Use 40ft containers', verdictPrivateTo: null });
+      expect(d.votes.find((v) => v.vote === 'REJECT')).toMatchObject({
         comment: 'Rates for Prod B are wrong',
-        commentHidden: false,
+        privateTo: null,
       });
     }
   });
@@ -404,7 +382,25 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
       missing: ['poDate', 'dispatchDate', 'deliverDate', 'challanNo', 'lrDetails'],
     });
 
-    // "Ordered" needs at least one component of that type for the product
+    // Each component's purchase order (D29)
+    const po = async (componentId: string) => {
+      const res = await as.mat!.post(`/v1/components/${componentId}/po`, {
+        uploadId: (await upload('mat', 'PO', 'po.pdf')).uploadId,
+      });
+      expect(res.statusCode, res.body).toBe(204);
+    };
+    // "Ordered" needs at least one component of that type, and every one of them its PO
+    const noPo = await act('mat', (await task('raw_material', 'Prod A')).id, {
+      action: 'COMPLETE',
+    });
+    expect(noPo.json()).toMatchObject({
+      error: 'COMPONENT_DOC_REQUIRED',
+      details: { components: ['API'] },
+    });
+    expect(
+      (await as.reg!.post(`/v1/components/${c2}/po`, { uploadId: crypto.randomUUID() })).statusCode,
+    ).toBe(403);
+    await po(c2);
     await ok('mat', (await task('raw_material', 'Prod A')).id, { action: 'COMPLETE' });
     const refused = await act('mat', (await task('raw_material', 'Prod B')).id, {
       action: 'COMPLETE',
@@ -414,7 +410,28 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
       details: { kind: 'RAW_MATERIAL' },
     });
     const c4 = await add(b!.id, 'Starch', 'RAW_MATERIAL');
+    await po(c4);
     await ok('mat', (await task('raw_material', 'Prod B')).id, { action: 'COMPLETE' });
+    await po(c1);
+    await po(c3);
+    // A PO opens only for Materials, approvers, Head Approvers and Admin (D29)
+    const poTables = (await as.mat!.get(`/v1/orders/${orderId}/components`)).json();
+    const poDoc = poTables.products[0].components.find((c: { id: string }) => c.id === c2).po;
+    expect(poDoc).toMatchObject({ kind: 'PO', fileName: 'po.pdf' });
+    const regTables = (await as.reg!.get(`/v1/orders/${orderId}/components`)).json();
+    expect(regTables.products[0].components.find((c: { id: string }) => c.id === c2)).toMatchObject(
+      { po: null, hasPo: true },
+    );
+    for (const [who, code] of [
+      ['mat', 200],
+      ['head1', 200],
+      ['admin', 200],
+      ['reg', 404],
+      ['mkt', 404],
+      ['creator', 404],
+    ] as const) {
+      expect((await as[who]!.get(`/v1/documents/${poDoc.id}/file`)).statusCode, who).toBe(code);
+    }
     for (const product of ['Prod A', 'Prod B']) {
       await ok('mat', (await task('packaging', product)).id, { action: 'COMPLETE' });
     }

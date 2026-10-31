@@ -3,11 +3,13 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { z } from 'zod';
 import type { AuthUser } from '../auth/sessions.js';
 import type { Db, Tx } from '../db/client.js';
+import type { StorageService } from '../storage/storage.js';
 import { componentChanges, orderComponents, orderProducts } from '../db/schema.js';
 import { AppError, forbidden, notFound } from '../errors.js';
 import { canEditComponents, canSeeOrder } from './access.js';
 import { localDay } from './clock.js';
 import { advance, loadCtx, logEvent } from './engine.js';
+import { attachFiles, prepareFiles, removeUploadObjects } from './files.js';
 
 type Input = z.output<typeof ComponentInput>;
 
@@ -215,4 +217,57 @@ export async function deleteComponent(
     });
     await advance(tx, ctx);
   });
+}
+
+/**
+ * Materials attaches a component's purchase order (D29). A new one replaces the shown one; the
+ * earlier ones stay in the order's documents. Only Materials, approvers, Head Approvers and Admin
+ * open POs (template.docAccess, docsByAccessOnly).
+ */
+export async function uploadComponentPo(
+  db: Db,
+  storage: StorageService,
+  user: AuthUser,
+  componentId: string,
+  uploadId: string,
+) {
+  const [existing] = await db
+    .select()
+    .from(orderComponents)
+    .where(eq(orderComponents.id, componentId));
+  if (!existing) throw notFound('Component');
+  // Who may, before touching the upload (checked again under the lock)
+  const pre = await loadCtx(db, existing.orderId);
+  if (!canSeeOrder(user, pre)) throw notFound('Order');
+  if (!canEditComponents(user, pre)) throw forbidden();
+  const { files, discard } = await prepareFiles(db, storage, user.id, existing.orderId, [
+    { uploadId, kind: 'PO' },
+  ]);
+  try {
+    await db.transaction(async (tx) => {
+      const ctx = await editable(tx, user, existing.orderId);
+      const [doc] = await attachFiles(tx, files, {
+        orderId: existing.orderId,
+        taskId: null,
+        roundId: null,
+        userId: user.id,
+        componentId,
+      });
+      await logEvent(tx, {
+        orderId: existing.orderId,
+        type: 'COMPONENT_PO',
+        actorId: user.id,
+        actingAs: 'MATERIALS',
+        details: {
+          component: existing.name,
+          documents: [{ id: doc!.id, kind: doc!.kind, fileName: doc!.fileName }],
+        },
+      });
+      await advance(tx, ctx);
+    });
+  } catch (err) {
+    await discard();
+    throw err;
+  }
+  await removeUploadObjects(storage, files);
 }

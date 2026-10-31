@@ -16,7 +16,7 @@ import {
   teamMembers,
   uploads,
 } from '../db/schema.js';
-import { addComponent, updateComponent } from '../engine/components.js';
+import { addComponent, updateComponent, uploadComponentPo } from '../engine/components.js';
 import { act, createOrder } from '../engine/engine.js';
 import type { StorageService } from '../storage/storage.js';
 
@@ -411,6 +411,15 @@ export async function seedDemo(
       async ordered(p: { name: string }, kind: Row[1]) {
         for (const [name] of of(p, kind)) {
           await o.mark(0.2);
+          // Each component's purchase order, then its PO Date (D29)
+          const po = await file('kabir', 'PO', `PO_${name.replace(/[^A-Za-z0-9]+/g, '_')}.pdf`);
+          await uploadComponentPo(
+            db,
+            storage,
+            users.kabir!,
+            parts.get(`${p.name}|${name}`)!.id,
+            po.uploadId,
+          );
           await save(`${p.name}|${name}`, { poDate: daysAgo(0) });
         }
       },

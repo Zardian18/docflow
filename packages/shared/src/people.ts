@@ -90,6 +90,9 @@ export const SLOT_INFO: Record<
   },
 };
 
+/** Approvers and Head Approvers: always in private messages and see every document (D29) */
+export const APPROVER_SLOTS: Slot[] = SLOTS.filter((s) => SLOT_INFO[s].hasGate);
+
 /** ALL: every named person on the stage must approve. ANY: the first approval is enough. */
 export const GATES = ['ALL', 'ANY'] as const;
 export const Gate = z.enum(GATES);
