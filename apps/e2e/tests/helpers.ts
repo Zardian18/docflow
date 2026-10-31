@@ -13,6 +13,7 @@ export const PEOPLE = {
   dev: 'Dev Iyer',
   lina: 'Lina Fernandes',
   kabir: 'Kabir Singh',
+  ananya: 'Ananya Rao',
   neha: 'Neha Joshi',
   farhan: 'Farhan Ali',
   pooja: 'Pooja Desai',
@@ -93,6 +94,7 @@ export function watchConsole(page: Page) {
  */
 export const ORDERS = {
   cbm: 'ORD-0001',
+  loops: 'TPE/PI/26-27/0043',
   delivery: 'THC/PI/26-27/0044',
   qa: 'TPE/PI/26-27/0045',
   bol: 'THC/PI/26-27/0047',
@@ -103,4 +105,14 @@ export async function openOrder(page: Page, ref: string) {
   await page.goto(`/orders?q=${encodeURIComponent(ref)}`);
   await page.getByRole('link', { name: ref }).filter({ visible: true }).first().click();
   await page.waitForURL(/\/orders\/[0-9a-f-]{36}/);
+}
+
+/** The page itself never scrolls sideways; wide tables scroll inside their own box */
+export async function expectNoSidewaysScroll(page: Page, label: string) {
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+    ),
+    `no sideways page scroll on ${label}`,
+  ).toBe(true);
 }

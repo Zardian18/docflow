@@ -15,6 +15,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { History, Pencil, Plus } from 'lucide-react';
 import { useId, useState } from 'react';
 import { toast } from 'sonner';
+import { DocumentButtons } from '@/components/DocumentButtons';
 import { FormError } from '@/components/forms';
 import { EmptyState, ErrorState, ListSkeleton } from '@/components/States';
 import { StatusPill } from '@/components/StatusPill';
@@ -408,6 +409,7 @@ export function ComponentTablesView({ orderId }: { orderId: string }) {
                       'Prod Name',
                       'Type',
                       'Status',
+                      'PO',
                       'Ordering delay',
                       'Delivery time',
                       'PO Qty',
@@ -450,6 +452,16 @@ export function ComponentTablesView({ orderId }: { orderId: string }) {
                             </span>
                           )}
                         </span>
+                      </td>
+                      <td className={cell}>
+                        {/* The purchase order: opens for Materials, approvers and Admin (D29) */}
+                        {c.po ? (
+                          <DocumentButtons doc={c.po} size="xs" />
+                        ) : c.hasPo ? (
+                          <span className="text-muted-foreground">Uploaded</span>
+                        ) : (
+                          <span className="text-status-amber">Missing</span>
+                        )}
                       </td>
                       <td className={cell}>
                         <DayCountCell count={c.orderingDays} since={productionDay} />

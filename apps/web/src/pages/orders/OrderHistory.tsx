@@ -13,6 +13,7 @@ import {
 } from '@docflow/shared';
 import { useQuery } from '@tanstack/react-query';
 import { Paperclip } from 'lucide-react';
+import { PrivateBadge } from '@/components/PrivateBadge';
 import { ErrorState, ListSkeleton } from '@/components/States';
 import { api } from '@/lib/api';
 import { openDocument } from '@/lib/documents';
@@ -76,6 +77,8 @@ function sentence(e: OrderEvent, step: string, product: string | null): string {
       return `Changed the order number from ${String(d.from)} to ${String(d.to)}`;
     case 'COMPONENT_ADDED':
       return `Added ${String(d.component)} to ${String(d.product)}`;
+    case 'COMPONENT_PO':
+      return `Uploaded the PO for ${String(d.component)}`;
     case 'COMPONENT_NOTE':
       return `Added a note to ${String(d.component)}`;
     case 'COMPONENT_UPDATED':
@@ -128,8 +131,10 @@ export function OrderHistory({ order, template }: { order: OrderDetail; template
                 )}
               </p>
               {e.comment && <p className="text-muted-foreground mt-0.5">“{e.comment}”</p>}
-              {e.commentHidden && (
-                <p className="text-muted-foreground mt-0.5 italic">Comment hidden</p>
+              {e.privateTo && (
+                <p className="mt-0.5">
+                  <PrivateBadge to={e.privateTo} />
+                </p>
               )}
               {docs.length > 0 && (
                 <ul className="mt-1 flex flex-wrap gap-2">

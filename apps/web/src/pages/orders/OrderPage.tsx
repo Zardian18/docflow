@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react';
 import { Link, useLocation, useParams, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
 import { DocumentButtons } from '@/components/DocumentButtons';
+import { PrivateBadge } from '@/components/PrivateBadge';
 import { FormError } from '@/components/forms';
 import { PageBody, PageHeader } from '@/components/PageHeader';
 import { ErrorState, ListSkeleton } from '@/components/States';
@@ -159,6 +160,7 @@ function Details({ order }: { order: OrderDetail }) {
                     {formatFileSize(d.fileSize)} · {d.uploadedByName},{' '}
                     {formatDateTime(d.uploadedAt)}
                   </span>
+                  {d.privateTo && <PrivateBadge to={d.privateTo} />}
                 </span>
                 <DocumentButtons doc={d} />
               </li>

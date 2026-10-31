@@ -63,6 +63,8 @@ test('Phase 1 in the browser: order, CBM loop, PI with both versions, approvals,
   c = card(sara.page, /^CBM/);
   await upload(sara.page, c, 'CBM_v2.pdf');
   await c.getByRole('button', { name: 'Send CBM to Marketing' }).click();
+  // Wait for the send to land before Marketing reloads
+  await expect(sara.page.getByText('With Marketing: Rohan Kapoor')).toBeVisible();
   await rohan.page.reload();
   await card(rohan.page, /^CBM/).getByRole('button', { name: 'Confirm CBM' }).click();
   await card(rohan.page, /Buyer confirmed the CBM/)

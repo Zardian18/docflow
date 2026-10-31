@@ -12,6 +12,7 @@ import {
   type Template,
 } from '@docflow/shared';
 import { Check, Circle, CircleDot, Clock3, CornerDownLeft, X } from 'lucide-react';
+import { PrivateBadge } from '@/components/PrivateBadge';
 import { StatusPill } from '@/components/StatusPill';
 import { formatDateTime } from '@/lib/format';
 import { days, PHASE_LABEL, waitedFor } from '@/lib/labels';
@@ -64,6 +65,7 @@ function Rounds({ rounds }: { rounds: ChannelRound[] }) {
               {r.submitComment && (
                 <span className="text-muted-foreground"> · “{r.submitComment}”</span>
               )}
+              {r.submitPrivateTo && <PrivateBadge to={r.submitPrivateTo} />}
             </span>
           )}
           {r.verdict && (
@@ -82,15 +84,12 @@ function Rounds({ rounds }: { rounds: ChannelRound[] }) {
                 {r.verdictComment && (
                   <span className="text-muted-foreground"> · “{r.verdictComment}”</span>
                 )}
+                {r.verdictPrivateTo && <PrivateBadge to={r.verdictPrivateTo} />}
               </span>
             </span>
           )}
           {!r.submittedAt && !r.verdict && (
             <span className="text-muted-foreground">In progress</span>
-          )}
-          {/* Phase 1 comments are private to some teams (D28) */}
-          {r.commentsHidden && (
-            <span className="text-muted-foreground block text-xs italic">Comments hidden</span>
           )}
         </li>
       ))}
@@ -129,9 +128,7 @@ function Votes({ step, task, votes }: { step: StepDef; task: TaskView; votes: Ap
                     {v.vote === 'APPROVE' ? 'approved' : 'rejected'} by {v.employeeName},{' '}
                     {formatDateTime(v.at)}
                     {v.comment && <span className="text-muted-foreground"> · “{v.comment}”</span>}
-                    {v.commentHidden && (
-                      <span className="text-muted-foreground italic"> · Comment hidden</span>
-                    )}
+                    {v.privateTo && <PrivateBadge to={v.privateTo} />}
                   </span>
                 ))}
               </li>
@@ -217,6 +214,7 @@ function TaskLine({
                 <b className="font-medium">{SHIPMENT_STATUS_LABEL[c.status]}</b>, {c.happenedOn}
                 {c.note && <span className="text-muted-foreground"> · “{c.note}”</span>}
                 <span className="text-muted-foreground"> · {c.loggedByName}</span>
+                {c.privateTo && <PrivateBadge to={c.privateTo} />}
               </li>
             ))}
           </ol>
@@ -243,49 +241,104 @@ const who = (step: StepDef) => {
  * order, per phase, with who has it, since when, every loop round and every vote.
  */
 export function ChainView({ order, template }: { order: OrderDetail; template: Template }) {
+  const taskIds = new Set(order.tasks.map((t) => t.id));
   return (
     <div className="flex flex-col gap-6">
-      {[1, 2, 3].map((phase) => (
-        <section
-          key={phase}
-          aria-labelledby={`phase-${phase}`}
-          className="bg-card rounded-xl border p-4 sm:p-5"
-        >
-          <h3 id={`phase-${phase}`} className="mb-4 text-sm font-semibold">
-            {PHASE_LABEL[phase]}
-          </h3>
-          <ol className="flex flex-col gap-5">
-            {template.steps
-              .filter((s) => s.phase === phase)
-              .map((step) => {
-                const tasks = order.tasks.filter((t) => t.stepKey === step.key);
-                return (
-                  <li key={step.key} className="flex flex-col gap-2">
-                    <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-                      <span className="text-[13px] font-semibold">{step.title}</span>
-                      <span className="text-muted-foreground text-xs">{who(step)}</span>
-                    </div>
-                    {step.perProduct && tasks.length === 0 && order.products.length > 0 ? (
-                      order.products.map((p) => (
-                        <TaskLine
-                          key={p.id}
-                          order={order}
-                          step={step}
-                          task={undefined}
-                          product={p.name}
-                        />
-                      ))
-                    ) : tasks.length === 0 ? (
-                      <TaskLine order={order} step={step} task={undefined} />
-                    ) : (
-                      tasks.map((t) => <TaskLine key={t.id} order={order} step={step} task={t} />)
-                    )}
-                  </li>
-                );
-              })}
-          </ol>
-        </section>
-      ))}
+      {[1, 2, 3].map((phase) =>
+        order.hiddenPhases.includes(phase) ? (
+          <HiddenPhase
+            key={phase}
+            phase={phase}
+            // Messages shared with this person from steps they otherwise don't see (D29)
+            rounds={order.rounds.filter((r) => !taskIds.has(r.taskId))}
+            votes={order.votes.filter((v) => !taskIds.has(v.taskId))}
+          />
+        ) : (
+          <section
+            key={phase}
+            aria-labelledby={`phase-${phase}`}
+            className="bg-card rounded-xl border p-4 sm:p-5"
+          >
+            <h3 id={`phase-${phase}`} className="mb-4 text-sm font-semibold">
+              {PHASE_LABEL[phase]}
+            </h3>
+            <ol className="flex flex-col gap-5">
+              {template.steps
+                .filter((s) => s.phase === phase)
+                .map((step) => {
+                  const tasks = order.tasks.filter((t) => t.stepKey === step.key);
+                  return (
+                    <li key={step.key} className="flex flex-col gap-2">
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                        <span className="text-[13px] font-semibold">{step.title}</span>
+                        <span className="text-muted-foreground text-xs">{who(step)}</span>
+                      </div>
+                      {step.perProduct && tasks.length === 0 && order.products.length > 0 ? (
+                        order.products.map((p) => (
+                          <TaskLine
+                            key={p.id}
+                            order={order}
+                            step={step}
+                            task={undefined}
+                            product={p.name}
+                          />
+                        ))
+                      ) : tasks.length === 0 ? (
+                        <TaskLine order={order} step={step} task={undefined} />
+                      ) : (
+                        tasks.map((t) => <TaskLine key={t.id} order={order} step={step} task={t} />)
+                      )}
+                    </li>
+                  );
+                })}
+            </ol>
+          </section>
+        ),
+      )}
     </div>
+  );
+}
+
+/**
+ * A phase this person isn't part of (D29: Phase 2 for Marketing): one line, plus any private
+ * messages from it that were shared with them.
+ */
+function HiddenPhase({
+  phase,
+  rounds,
+  votes,
+}: {
+  phase: number;
+  rounds: ChannelRound[];
+  votes: ApprovalVote[];
+}) {
+  return (
+    <section aria-labelledby={`phase-${phase}`} className="bg-card rounded-xl border p-4 sm:p-5">
+      <h3 id={`phase-${phase}`} className="text-sm font-semibold">
+        {PHASE_LABEL[phase]}
+      </h3>
+      <p className="text-muted-foreground mt-1 text-[13px]">
+        In the hands of the teams working on it. You’ll see it in the history when the materials are
+        complete.
+      </p>
+      {(rounds.length > 0 || votes.length > 0) && (
+        <div className="mt-3">
+          <p className="text-[13px] font-semibold">Shared with you</p>
+          <Rounds rounds={rounds} />
+          {votes.length > 0 && (
+            <ol className="mt-2 flex flex-col gap-1 border-l pl-3 text-[13px]">
+              {votes.map((v) => (
+                <li key={v.employeeName + v.at}>
+                  {v.vote === 'APPROVE' ? 'Approved' : 'Rejected'} by {v.employeeName},{' '}
+                  {formatDateTime(v.at)}
+                  {v.comment && <span className="text-muted-foreground"> · “{v.comment}”</span>}
+                  {v.privateTo && <PrivateBadge to={v.privateTo} />}
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
