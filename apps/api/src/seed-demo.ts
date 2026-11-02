@@ -5,6 +5,10 @@
 //                                                 Admin, and one random password, printed once
 //   SEED_DEMO_PASSWORD=… … seed:demo --live        the same, reusing a password the owner already
 //                                                 holds (given at run time, never stored)
+//   pnpm --filter @docflow/api seed:demo --add-private
+//                                                 adds only the orders full of private messages
+//                                                 (D31) next to existing data, e.g. the live site;
+//                                                 checks the people and buyers it needs first
 // Uses the same storage as the API (STORAGE_DRIVER), so seeded files open in the app.
 import { randomBytes } from 'node:crypto';
 import { parseArgs } from 'node:util';
@@ -14,7 +18,12 @@ import { runMigrations } from './db/migrations.js';
 import { DEMO_DOMAIN, DEMO_PASSWORD, seedDemo } from './demo/seed.js';
 import { loadEnv } from './env.js';
 
-const { values } = parseArgs({ options: { live: { type: 'boolean', default: false } } });
+const { values } = parseArgs({
+  options: {
+    live: { type: 'boolean', default: false },
+    'add-private': { type: 'boolean', default: false },
+  },
+});
 const env = loadEnv();
 if (env.NODE_ENV === 'production') {
   console.error('seed:demo refuses to run with NODE_ENV=production');
@@ -25,6 +34,11 @@ await runMigrations(env.DATABASE_URL_DIRECT ?? env.DATABASE_URL);
 const { pool, db } = createDb(env.DATABASE_URL_DIRECT ?? env.DATABASE_URL);
 try {
   const storage = localStorageFromEnv(env)?.storage ?? storageFromEnv(env);
+  if (values['add-private']) {
+    const added = await seedDemo(db, storage, { mode: 'add-private' });
+    console.log(`Added ${added.orders} orders with private messages.`);
+    process.exit(0);
+  }
   // The demo password is public (it's in this repo), so it must never exist on the live site
   const reused = process.env.SEED_DEMO_PASSWORD;
   if (values.live && reused !== undefined && (reused.length < 12 || reused === DEMO_PASSWORD)) {

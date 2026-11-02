@@ -245,6 +245,20 @@ export function ChainView({ order, template }: { order: OrderDetail; template: T
   const taskIds = new Set(order.tasks.map((t) => t.id));
   return (
     <div className="flex flex-col gap-6">
+      {/* Purchase orders, one per component, in one place at the start of the chain: Materials
+          attaches them, Approvers, Head Approvers and Admin view them (D30, D31) */}
+      {order.poAccess !== 'NONE' && order.canSeeComponents && (
+        <section
+          id="purchase-orders"
+          aria-labelledby="purchase-orders-heading"
+          className="bg-card scroll-mt-24 rounded-xl border p-4 sm:p-5"
+        >
+          <h3 id="purchase-orders-heading" className="mb-2 text-sm font-semibold">
+            Purchase orders
+          </h3>
+          <ComponentPoList orderId={order.id} canUpload={order.poAccess === 'UPLOAD'} />
+        </section>
+      )}
       {[1, 2, 3].map((phase) =>
         order.hiddenPhases.includes(phase) ? (
           <HiddenPhase
@@ -263,13 +277,6 @@ export function ChainView({ order, template }: { order: OrderDetail; template: T
             <h3 id={`phase-${phase}`} className="mb-4 text-sm font-semibold">
               {PHASE_LABEL[phase]}
             </h3>
-            {/* Purchase orders, one per component: Materials attaches, approvers view (D30) */}
-            {phase === 2 && order.poAccess !== 'NONE' && order.canSeeComponents && (
-              <div className="bg-surface-subtle mb-5 rounded-lg border p-3 sm:p-4">
-                <h4 className="mb-2 text-[13px] font-semibold">Purchase orders</h4>
-                <ComponentPoList orderId={order.id} canUpload={order.poAccess === 'UPLOAD'} />
-              </div>
-            )}
             <ol className="flex flex-col gap-5">
               {template.steps
                 .filter((s) => s.phase === phase)

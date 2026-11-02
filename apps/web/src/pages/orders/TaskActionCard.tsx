@@ -4,6 +4,7 @@ import {
   SHIPMENT_STATUS_LABEL,
   SHIPMENT_STATUSES,
   stepOf,
+  TAG_LABEL,
   TEAM_LABEL,
   type DocKind,
   type OrderDetail,
@@ -35,7 +36,6 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { api, errorMessage } from '@/lib/api';
 import { waitedFor } from '@/lib/labels';
-import { ComponentPoList } from './ComponentPoList';
 
 const today = () => {
   const d = new Date();
@@ -247,13 +247,16 @@ export function TaskActionCard({
 
       <ReviewDocList docs={task.reviewDocs} />
 
-      {step.kind === 'TASK' && step.needsComponentDoc && step.needsComponents && task.productId && (
-        <ComponentPoList
-          orderId={order.id}
-          canUpload={order.poAccess === 'UPLOAD'}
-          productId={task.productId}
-          kind={step.needsComponents}
-        />
+      {step.kind === 'TASK' && step.needsComponentDoc && (
+        // POs are attached in one place, the Purchase orders area at the start of the chain (D31)
+        <p className="text-muted-foreground text-[13px]">
+          Every {step.needsComponents ? TAG_LABEL[step.needsComponents].toLowerCase() : ''}{' '}
+          component needs its purchase order (PO) first. Attach them in{' '}
+          <a href="#purchase-orders" className="text-primary hover:underline">
+            Purchase orders
+          </a>{' '}
+          at the top of the chain.
+        </p>
       )}
 
       {docs.map((d) => (
@@ -437,7 +440,7 @@ export function TaskActionCard({
         />
       </div>
 
-      <PrivatePicker value={privateTo} onChange={setPrivateTo} />
+      <PrivatePicker orderId={order.id} value={privateTo} onChange={setPrivateTo} />
 
       <FormError message={problem ?? (act.error ? errorMessage(act.error) : undefined)} />
       <div className="flex flex-wrap gap-2">

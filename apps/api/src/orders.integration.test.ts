@@ -427,8 +427,8 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
       ['head1', 200],
       // Approvers by role see every PO, even on orders they aren't named on (D30)
       ['outsider', 200],
-      // Admin doesn't: POs are for Materials and the approvers only (D30)
-      ['admin', 404],
+      // Admin sees everything, POs included (D31)
+      ['admin', 200],
       ['reg', 404],
       ['mkt', 404],
       ['creator', 404],

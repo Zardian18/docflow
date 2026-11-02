@@ -174,8 +174,21 @@ const daysAgo = (n: number, now = Date.now()) => new Date(now - n * DAY).toISOSt
 export async function seedDemo(
   db: Db,
   storage: StorageService,
-  { password = DEMO_PASSWORD, withAdmin = true }: { password?: string; withAdmin?: boolean } = {},
+  {
+    password = DEMO_PASSWORD,
+    withAdmin = true,
+    mode = 'full',
+  }: {
+    password?: string;
+    withAdmin?: boolean;
+    /**
+     * full: everything, into an empty database. add-private: only the orders full of private
+     * messages (D31), added next to existing data, using the people and buyers already there.
+     */
+    mode?: 'full' | 'add-private';
+  } = {},
 ) {
+  if (mode === 'add-private') return addPrivateOrders(db, storage);
   const [{ others } = { others: 0 }] = await db
     .select({ others: count() })
     .from(employees)
@@ -196,6 +209,7 @@ export async function seedDemo(
 
   const passwordHash = await hashPassword(password);
   const users: Record<string, AuthUser> = {};
+  const buyerIds: Record<string, string> = {};
   for (const p of PEOPLE.filter((p) => withAdmin || p.key !== 'admin')) {
     const [row] = await db
       .insert(employees)
@@ -220,7 +234,6 @@ export async function seedDemo(
     };
   }
 
-  const buyerIds: Record<string, string> = {};
   for (const b of BUYERS) {
     const [row] = await db
       .insert(buyers)
@@ -236,7 +249,97 @@ export async function seedDemo(
       if (gate) await db.insert(buyerSlotGates).values({ buyerId: row!.id, slot, gate });
     }
   }
-  let piNumber = 40;
+  return runScenarios(db, storage, users, buyerIds, 'full');
+}
+
+/** Loads a person as the engine sees them: teams and capabilities from the database */
+async function loadUser(db: Db, id: string): Promise<AuthUser> {
+  const { rows } = await db.execute<{
+    name: string;
+    email: string;
+    teams: Team[];
+    capabilities: Capability[];
+  }>(sql`
+    select e.name, e.email,
+           array(select team::text from team_members t where t.employee_id = e.id) as teams,
+           array(select capability::text from employee_capabilities c where c.employee_id = e.id) as capabilities
+      from employees e where e.id = ${id} and e.is_active`);
+  const r = rows[0];
+  if (!r) throw new Error(`demo: employee ${id} is missing or inactive`);
+  return {
+    id,
+    sessionId: 'seed',
+    name: r.name,
+    email: r.email,
+    employeeCode: null,
+    teams: r.teams,
+    capabilities: r.capabilities,
+  };
+}
+
+/** The team members the private-message orders need, by demo account (D31) */
+const TEAM_PEOPLE: Array<[string, Team[]]> = [
+  ['kabir', ['MATERIALS']],
+  ['neha', ['MATERIALS']],
+  ['lina', ['REGULATION']],
+  ['dev', ['REGULATION', 'PRODUCTION']],
+  ['ananya', ['DESIGN']],
+  ['farhan', ['PRODUCTION']],
+  ['pooja', ['ACCOUNTS']],
+  ['imran', ['LOGISTICS']],
+  ['tara', ['LOGISTICS', 'ACCOUNTS']],
+];
+
+/**
+ * Adds only the private-message orders (D31) to a database that already has data, e.g. the
+ * live site: the demo team members and buyers must exist; the chains are whatever the buyers
+ * have now. Checks everything before writing anything.
+ */
+async function addPrivateOrders(db: Db, storage: StorageService) {
+  const users: Record<string, AuthUser> = {};
+  const problems: string[] = [];
+  for (const [key, teams] of TEAM_PEOPLE) {
+    const { rows } = await db.execute<{ id: string }>(
+      sql`select id from employees where lower(email) = ${demoEmail(key)} and is_active`,
+    );
+    if (!rows[0]) {
+      problems.push(`${demoEmail(key)} is missing or inactive`);
+      continue;
+    }
+    const u = await loadUser(db, rows[0].id);
+    const lacking = teams.filter((t) => !u.teams.includes(t));
+    if (lacking.length) problems.push(`${u.name} is not in ${lacking.join(', ')}`);
+    users[key] = u;
+  }
+  const buyerIds: Record<string, string> = {};
+  for (const b of BUYERS) {
+    const { rows } = await db.execute<{ id: string }>(
+      sql`select id from buyers where (code = ${b.code} or lower(name) = lower(${b.name})) and is_active limit 1`,
+    );
+    if (rows[0]) buyerIds[b.key] = rows[0].id;
+    else problems.push(`buyer ${b.name} (${b.code}) is missing or inactive`);
+  }
+  if (problems.length) {
+    throw new Error(`Nothing was added. Fix these first:\n- ${problems.join('\n- ')}`);
+  }
+  return runScenarios(db, storage, users, buyerIds, 'add-private');
+}
+
+/** Drives the engine through every demo order, as people would, then spreads it over days */
+async function runScenarios(
+  db: Db,
+  storage: StorageService,
+  users: Record<string, AuthUser>,
+  buyerIds: Record<string, string>,
+  mode: 'full' | 'add-private',
+) {
+  // Live PI numbers continue well past the first demo's
+  let piNumber = mode === 'full' ? 40 : 100;
+  /** A named person on an order, loaded on first use (the live chains can be anyone) */
+  const person = async (id: string) => {
+    users[id] ??= await loadUser(db, id);
+    return id;
+  };
 
   // ---- Helpers that drive the engine as a person would ----------------------------------
 
@@ -273,12 +376,22 @@ export async function seedDemo(
     marks.push({ real: new Date(Date.now() - 1000), day: 0 });
     await pause();
     const buyer = BUYERS.find((b) => b.key === buyerKey)!;
-    const marketing = buyer.chain.find((s) => s[0] === 'MARKETING')![1][0]!;
+    // Whoever the buyer's chain names as Marketing creates it (the live chains can differ)
+    const { rows: mkt } = await db.execute<{ id: string }>(sql`
+      select employee_id as id from buyer_slot_people
+       where buyer_id = ${buyerIds[buyerKey]} and slot = 'MARKETING' order by ordinal limit 1`);
     const id = await createOrder(
       db,
-      users[marketing]!,
+      users[await person(mkt[0]!.id)]!,
       OrderCreate.parse({ buyerId: buyerIds[buyerKey], notes }),
     );
+    /** The people on this order's slot, as keys of `users` */
+    const slot = async (name: string) => {
+      const { rows } = await db.execute<{ id: string }>(sql`
+        select employee_id as id from order_slot_people
+         where order_id = ${id} and slot = ${name} order by ordinal`);
+      return Promise.all(rows.map((r) => person(r.id)));
+    };
     const taskOf = async (stepKey: string, product?: string) => {
       const rows = await db.execute<{ id: string; name: string | null }>(sql`
         select t.id, p.name from ${tasks} t left join order_products p on p.id = t.product_id
@@ -305,6 +418,14 @@ export async function seedDemo(
       startDaysAgo,
       key,
       mark,
+      slot,
+      /** Who acts in Phase 1 here: this order's own chain */
+      chain: async () => ({
+        creator: (await slot('CREATOR'))[0]!,
+        mkt: (await slot('MARKETING'))[0]!,
+        approver: (await slot('PI_APPROVER'))[0]!,
+        heads: await slot('PI_HEAD'),
+      }),
       piRef: () => `${buyer.pi}/${String(++piNumber).padStart(4, '0')}`,
       products: async () => {
         const rows = await db.execute<{ id: string; name: string }>(
@@ -325,7 +446,7 @@ export async function seedDemo(
 
   async function phase1(
     o: O,
-    who: { creator: string; mkt: string; approver: string; heads: string[] },
+    who: { creator: string; mkt: string; approver: string; heads: string[]; approvers?: string[] },
     products: string[],
     opts: { rejectPi?: boolean; stop?: 'head' | 'advance' } = {},
   ) {
@@ -371,9 +492,10 @@ export async function seedDemo(
       });
       await o.step(0.5, who.mkt, 'pi_approval', { action: 'APPROVE' });
     }
-    await o.step(1, who.approver, 'pi_approval', { action: 'APPROVE' });
+    // Everyone the stage needs (ALL), or the first (ANY): the live chains can be either
+    await approveStage(o, 'pi_approval', 'approver', who.approvers ?? [who.approver], 1);
     if (opts.stop === 'head') return;
-    for (const h of who.heads) await o.step(0.5, h, 'pi_approval', { action: 'APPROVE' });
+    await approveStage(o, 'pi_approval', 'head', who.heads);
     await o.step(0.5, who.mkt, 'advance_requested', { action: 'LOG' });
     if (opts.stop === 'advance') return;
     await o.step(2, 'pooja', 'advance_verified', {
@@ -556,111 +678,395 @@ export async function seedDemo(
   const THC = { creator: 'rahul', mkt: 'nisha', approver: 'arjun', heads: ['meera'] };
 
   const made: O[] = [];
+  if (mode === 'full') {
+    // 1. Phase 1: CBM sent back once, the revision waits for Marketing
+    {
+      const o = await order('cbm', 'alnoor', '2 products for the Dubai tender; 40ft containers', 4);
+      await o.step(0.5, 'sara', 'cbm', {
+        action: 'SUBMIT',
+        uploads: [await file('sara', 'CBM', 'CBM_v1.pdf')],
+      });
+      await o.step(1, 'rohan', 'cbm', {
+        action: 'RETURN',
+        comment: 'Pallet height over the limit',
+      });
+      await o.step(1.5, 'sara', 'cbm', {
+        action: 'SUBMIT',
+        uploads: [await file('sara', 'CBM', 'CBM_v2.pdf')],
+        comment: 'Lowered to 4 layers',
+      });
+      made.push(o);
+    }
+    // 2. Phase 1: PI rejected once, now with the Head Approver
+    {
+      const o = await order('pi', 'kenya', 'Repeat order, same products as March', 9);
+      await phase1(o, TPE, ['Paracetamol 500mg Tablets', 'ORS Sachets'], {
+        rejectPi: true,
+        stop: 'head',
+      });
+      made.push(o);
+    }
+    // 3. Phase 1: waiting for Accounts to see the advance
+    {
+      const o = await order('advance', 'medline', 'Capsules only', 10);
+      await phase1(o, THC, ['Amoxicillin 250mg Capsules'], { stop: 'advance' });
+      made.push(o);
+    }
+    // 4. Phase 2: review loops in progress
+    {
+      const o = await order('loops', 'andes', 'Two products; Spanish artwork', 21);
+      await phase1(o, TPE, ['Paracetamol 500mg Tablets', 'Amoxicillin 250mg Capsules']);
+      await phase2(o, ROWS, 'loops');
+      made.push(o);
+    }
+    // 5. Phase 2: one component still to arrive
+    {
+      const o = await order('delivery', 'medline', 'ORS for the rainy season', 30);
+      await phase1(o, THC, ['ORS Sachets', 'Paracetamol 500mg Tablets']);
+      await phase2(o, ROWS, 'delivery');
+      made.push(o);
+    }
+    // 6. Phase 2: Production QA sent cartons back to Materials
+    {
+      const o = await order('qa', 'kenya', 'Tablets, urgent', 34);
+      await phase1(o, TPE, ['Paracetamol 500mg Tablets']);
+      await phase2(o, ROWS, 'qa');
+      made.push(o);
+    }
+    // 7. Phase 3: payment check restarted after a short payment
+    {
+      const o = await order('payment', 'alnoor', 'Capsules and tablets', 45);
+      await phase1(o, TPE, ['Amoxicillin 250mg Capsules', 'Paracetamol 500mg Tablets']);
+      await phase2(o, ROWS, 'end');
+      await o.step(1, 'imran', 'container', {
+        action: 'SUBMIT',
+        comment: '1 × 40ft HC, 18 pallets, 21.4 t',
+      });
+      await o.step(1, 'rohan', 'container', { action: 'CONFIRM' });
+      await o.step(1, 'imran', 'invoice', {
+        action: 'SUBMIT',
+        uploads: [await file('imran', 'INVOICE', 'Commercial_Invoice.pdf')],
+      });
+      await o.step(1, 'rohan', 'invoice', {
+        action: 'RETURN',
+        comment: 'HS code for capsules is 3004.10',
+      });
+      await o.step(1, 'imran', 'invoice', {
+        action: 'SUBMIT',
+        uploads: [await file('imran', 'INVOICE', 'Commercial_Invoice_v2.pdf')],
+      });
+      await o.step(0.5, 'rohan', 'invoice', { action: 'CONFIRM' });
+      await o.step(0.5, 'rohan', 'balance_requested', { action: 'LOG' });
+      await o.step(3, 'pooja', 'payment_check', { action: 'APPROVE', payment: payment('5600000') });
+      await o.step(0.5, 'rohan', 'payment_check', { action: 'APPROVE' });
+      await o.step(1, 'arjun', 'payment_check', {
+        action: 'REJECT',
+        comment: 'Short by INR 1,60,000 after bank charges',
+      });
+      await o.step(2, 'pooja', 'payment_check', { action: 'APPROVE', payment: payment('160000') });
+      await o.step(0.5, 'rohan', 'payment_check', { action: 'APPROVE' });
+      made.push(o);
+    }
+    // 8. Phase 3: at sea; the buyer asked for the BoL, now with the Head Approvers
+    {
+      const o = await order('bol', 'gulf', 'ORS sachets', 60);
+      await phase1(o, THC, ['ORS Sachets']);
+      await phase2(o, ROWS, 'end');
+      await o.step(1, 'tara', 'container', { action: 'SUBMIT', comment: '1 × 20ft, 9 pallets' });
+      await o.step(1, 'nisha', 'container', { action: 'CONFIRM' });
+      await o.step(1, 'tara', 'invoice', {
+        action: 'SUBMIT',
+        uploads: [await file('tara', 'INVOICE', 'Commercial_Invoice.pdf')],
+      });
+      await o.step(1, 'nisha', 'invoice', { action: 'CONFIRM' });
+      await o.step(0.5, 'nisha', 'balance_requested', { action: 'LOG' });
+      await o.step(2, 'pooja', 'payment_check', { action: 'APPROVE', payment: payment('3400000') });
+      await o.step(0.5, 'nisha', 'payment_check', { action: 'APPROVE' });
+      await o.step(0.5, 'priya', 'payment_check', { action: 'APPROVE' });
+      await o.step(0.5, 'meera', 'payment_check', { action: 'APPROVE' });
+      await o.step(1, 'tara', 'sailed', { action: 'LOG', comment: 'Sailed from Nhava Sheva' });
+      await o.step(3, 'tara', 'tracking', {
+        action: 'CHECKPOINT',
+        shipmentStatus: 'IN_TRANSIT',
+        comment: 'Transshipment at Colombo',
+      });
+      await o.step(4, 'imran', 'tracking', {
+        action: 'CHECKPOINT',
+        shipmentStatus: 'DELAYED',
+        comment: 'Congestion at Panama, about 3 days',
+      });
+      await o.step(2, 'imran', 'bol_requested', {
+        action: 'LOG',
+        comment: 'Buyer emailed for the BoL',
+      });
+      await o.step(0.5, 'imran', 'bol', {
+        action: 'COMPLETE',
+        uploads: [await file('imran', 'BOL', 'Bill_of_Lading.pdf')],
+      });
+      await o.step(0.5, 'tara', 'bol_approval', { action: 'APPROVE' });
+      await o.step(0.5, 'nisha', 'bol_approval', { action: 'APPROVE' });
+      await o.step(0.5, 'arjun', 'bol_approval', { action: 'APPROVE' });
+      made.push(o);
+    }
+    // 9. No Action Needed: BoL sent, still at sea
+    // 10. Done
+    for (const [key, buyerKey, startDays, close] of [
+      ['sent', 'kenya', 75, false],
+      ['done', 'andes', 95, true],
+    ] as const) {
+      const o = await order(key, buyerKey, 'Tablets', startDays);
+      await phase1(o, TPE, ['Paracetamol 500mg Tablets']);
+      await phase2(o, ROWS, 'end');
+      await o.step(1, 'imran', 'container', { action: 'SUBMIT', comment: '1 × 40ft' });
+      await o.step(1, 'rohan', 'container', { action: 'CONFIRM' });
+      await o.step(1, 'imran', 'invoice', {
+        action: 'SUBMIT',
+        uploads: [await file('imran', 'INVOICE', 'Commercial_Invoice.pdf')],
+      });
+      await o.step(1, 'rohan', 'invoice', { action: 'CONFIRM' });
+      await o.step(0.5, 'rohan', 'balance_requested', { action: 'LOG' });
+      await o.step(2, 'pooja', 'payment_check', { action: 'APPROVE', payment: payment('4300000') });
+      await o.step(0.5, 'rohan', 'payment_check', { action: 'APPROVE' });
+      await o.step(0.5, 'arjun', 'payment_check', { action: 'APPROVE' });
+      await o.step(0.5, 'meera', 'payment_check', { action: 'APPROVE' });
+      await o.step(1, 'imran', 'sailed', { action: 'LOG' });
+      await o.step(5, 'imran', 'tracking', {
+        action: 'CHECKPOINT',
+        shipmentStatus: 'IN_TRANSIT',
+        comment: 'On schedule',
+      });
+      await o.step(4, 'imran', 'bol_requested', { action: 'LOG' });
+      await o.step(0.5, 'imran', 'bol', {
+        action: 'COMPLETE',
+        uploads: [await file('imran', 'BOL', 'Bill_of_Lading.pdf')],
+      });
+      for (const who of ['pooja', 'rohan', 'priya', 'vikram', 'meera'])
+        await o.step(0.5, who, 'bol_approval', { action: 'APPROVE' });
+      await o.step(0.5, 'imran', 'bol_sent', { action: 'LOG', comment: 'Couriered original BoL' });
+      await o.step(3, 'imran', 'tracking', {
+        action: 'CHECKPOINT',
+        shipmentStatus: 'AT_PORT',
+        comment: 'Arrived at destination port',
+      });
+      if (close) {
+        await o.step(2, 'imran', 'tracking', {
+          action: 'CHECKPOINT',
+          shipmentStatus: 'CUSTOMS',
+          comment: 'Cleared customs',
+        });
+        await o.step(2, 'imran', 'delivered', {
+          action: 'CLOSE',
+          comment: 'Buyer confirmed receipt',
+        });
+      }
+      made.push(o);
+    }
+  }
 
-  // 1. Phase 1: CBM sent back once, the revision waits for Marketing
+  // ---- Orders full of private messages (D31), at different stages ------------------------
+
+  /** Everyone on a stage approves, stopping as soon as the stage moves on (an ANY gate) */
+  async function approveStage(o: O, stepKey: string, stage: string, ids: string[], after = 0.5) {
+    for (const id of ids) {
+      const { rows } = await db.execute<{ status: string; side: string | null }>(
+        sql`select status::text, side from ${tasks} where order_id = ${o.id} and step_key = ${stepKey}`,
+      );
+      if (rows[0]?.status !== 'OPEN' || rows[0].side !== stage) return;
+      await o.step(after, id, stepKey, { action: 'APPROVE' });
+    }
+  }
+  /** Shared with these people and teams (approvers and Head Approvers always see it) */
+  const priv = (people: string[], teams: Team[] = []) => ({
+    employeeIds: people.map((k) => users[k]!.id),
+    teams,
+  });
+
+  // A. Phase 1, CBM: Marketing sends it back privately to Accounts; the Creator answers privately
   {
-    const o = await order('cbm', 'alnoor', '2 products for the Dubai tender; 40ft containers', 4);
-    await o.step(0.5, 'sara', 'cbm', {
+    const o = await order('priv-cbm', 'alnoor', 'Margin-sensitive tender, 2 products', 3);
+    const c = await o.chain();
+    await o.step(0.3, c.creator, 'cbm', {
       action: 'SUBMIT',
-      uploads: [await file('sara', 'CBM', 'CBM_v1.pdf')],
+      uploads: [await file(c.creator, 'CBM', 'CBM_v1.pdf')],
+      comment: 'First draft, 18 pallets',
     });
-    await o.step(1, 'rohan', 'cbm', { action: 'RETURN', comment: 'Pallet height over the limit' });
-    await o.step(1.5, 'sara', 'cbm', {
-      action: 'SUBMIT',
-      uploads: [await file('sara', 'CBM', 'CBM_v2.pdf')],
-      comment: 'Lowered to 4 layers',
-    });
-    made.push(o);
-  }
-  // 2. Phase 1: PI rejected once, now with the Head Approver
-  {
-    const o = await order('pi', 'kenya', 'Repeat order, same products as March', 9);
-    await phase1(o, TPE, ['Paracetamol 500mg Tablets', 'ORS Sachets'], {
-      rejectPi: true,
-      stop: 'head',
-    });
-    made.push(o);
-  }
-  // 3. Phase 1: waiting for Accounts to see the advance
-  {
-    const o = await order('advance', 'medline', 'Capsules only', 10);
-    await phase1(o, THC, ['Amoxicillin 250mg Capsules'], { stop: 'advance' });
-    made.push(o);
-  }
-  // 4. Phase 2: review loops in progress
-  {
-    const o = await order('loops', 'andes', 'Two products; Spanish artwork', 21);
-    await phase1(o, TPE, ['Paracetamol 500mg Tablets', 'Amoxicillin 250mg Capsules']);
-    await phase2(o, ROWS, 'loops');
-    made.push(o);
-  }
-  // 5. Phase 2: one component still to arrive
-  {
-    const o = await order('delivery', 'medline', 'ORS for the rainy season', 30);
-    await phase1(o, THC, ['ORS Sachets', 'Paracetamol 500mg Tablets']);
-    await phase2(o, ROWS, 'delivery');
-    made.push(o);
-  }
-  // 6. Phase 2: Production QA sent cartons back to Materials
-  {
-    const o = await order('qa', 'kenya', 'Tablets, urgent', 34);
-    await phase1(o, TPE, ['Paracetamol 500mg Tablets']);
-    await phase2(o, ROWS, 'qa');
-    made.push(o);
-  }
-  // 7. Phase 3: payment check restarted after a short payment
-  {
-    const o = await order('payment', 'alnoor', 'Capsules and tablets', 45);
-    await phase1(o, TPE, ['Amoxicillin 250mg Capsules', 'Paracetamol 500mg Tablets']);
-    await phase2(o, ROWS, 'end');
-    await o.step(1, 'imran', 'container', {
-      action: 'SUBMIT',
-      comment: '1 × 40ft HC, 18 pallets, 21.4 t',
-    });
-    await o.step(1, 'rohan', 'container', { action: 'CONFIRM' });
-    await o.step(1, 'imran', 'invoice', {
-      action: 'SUBMIT',
-      uploads: [await file('imran', 'INVOICE', 'Commercial_Invoice.pdf')],
-    });
-    await o.step(1, 'rohan', 'invoice', {
+    await o.step(1, c.mkt, 'cbm', {
       action: 'RETURN',
-      comment: 'HS code for capsules is 3004.10',
+      comment:
+        'The buyer’s target price leaves no room for a 40ft HC. Accounts, please check the margin before we resend.',
+      privateTo: priv([], ['ACCOUNTS']),
     });
-    await o.step(1, 'imran', 'invoice', {
+    await o.step(1, c.creator, 'cbm', {
       action: 'SUBMIT',
-      uploads: [await file('imran', 'INVOICE', 'Commercial_Invoice_v2.pdf')],
+      uploads: [await file(c.creator, 'CBM', 'CBM_v2.pdf')],
+      comment: 'Re-planned to 16 pallets. Margin is 4.2%, for Marketing only.',
+      privateTo: priv([c.mkt]),
     });
-    await o.step(0.5, 'rohan', 'invoice', { action: 'CONFIRM' });
-    await o.step(0.5, 'rohan', 'balance_requested', { action: 'LOG' });
-    await o.step(3, 'pooja', 'payment_check', { action: 'APPROVE', payment: payment('5600000') });
-    await o.step(0.5, 'rohan', 'payment_check', { action: 'APPROVE' });
-    await o.step(1, 'arjun', 'payment_check', {
-      action: 'REJECT',
-      comment: 'Short by INR 1,60,000 after bank charges',
-    });
-    await o.step(2, 'pooja', 'payment_check', { action: 'APPROVE', payment: payment('160000') });
-    await o.step(0.5, 'rohan', 'payment_check', { action: 'APPROVE' });
     made.push(o);
   }
-  // 8. Phase 3: at sea; the buyer asked for the BoL, now with the Head Approvers
+
+  // B. Phase 1, PI approval: a private rejection to Logistics, a private rework, now with the Head
   {
-    const o = await order('bol', 'gulf', 'ORS sachets', 60);
-    await phase1(o, THC, ['ORS Sachets']);
+    const o = await order('priv-pi', 'kenya', 'Repeat order, CIF Mombasa', 8);
+    const c = await o.chain();
+    await o.step(0.3, c.creator, 'cbm', {
+      action: 'SUBMIT',
+      uploads: [await file(c.creator, 'CBM', 'CBM_v1.pdf')],
+    });
+    await o.step(0.5, c.mkt, 'cbm', { action: 'CONFIRM' });
+    await o.step(1, c.mkt, 'cbm_buyer_confirmed', { action: 'LOG' });
+    await o.step(1, c.creator, 'pi', {
+      action: 'COMPLETE',
+      products: ['Paracetamol 500mg Tablets'],
+      orderRef: o.piRef(),
+      uploads: [
+        await file(c.creator, 'PI_FULL', 'PI_full.pdf'),
+        await file(c.creator, 'PI_NO_RATES', 'PI_quantities_only.pdf'),
+      ],
+    });
+    await o.step(0.5, c.mkt, 'pi_approval', { action: 'APPROVE' });
+    await o.step(1, c.approver, 'pi_approval', {
+      action: 'REJECT',
+      comment:
+        'Freight for CIF Mombasa is under-quoted. Logistics, please re-quote before this goes out.',
+      privateTo: priv([], ['LOGISTICS']),
+    });
+    await o.step(1, c.creator, 'pi', {
+      action: 'COMPLETE',
+      products: ['Paracetamol 500mg Tablets'],
+      uploads: [await file(c.creator, 'PI_FULL', 'PI_full_v2.pdf')],
+      comment: 'Freight revised with Logistics’ new quote',
+      privateTo: priv([c.mkt], ['LOGISTICS']),
+    });
+    await o.step(0.5, c.mkt, 'pi_approval', { action: 'APPROVE' });
+    await o.step(1, c.approver, 'pi_approval', {
+      action: 'APPROVE',
+      comment: 'Fine at the revised freight',
+      privateTo: priv([c.mkt]),
+    });
+    made.push(o);
+  }
+
+  // C. Phase 2, review loops: private returns to Marketing and Design, a private resubmit
+  {
+    const o = await order('priv-loops', 'medline', 'ORS, new artwork for the regulator', 22);
+    const c = await o.chain();
+    await phase1(o, { ...c, approvers: await o.slot('PI_APPROVER') }, ['ORS Sachets']);
+    const product = 'ORS Sachets';
+    await o.step(
+      0.5,
+      'kabir',
+      'annexure',
+      { action: 'SUBMIT', uploads: [await file('kabir', 'ANNEXURE', 'Annexure_ORS.pdf')] },
+      product,
+    );
+    await o.step(
+      0.5,
+      'ananya',
+      'artwork',
+      { action: 'SUBMIT', uploads: [await file('ananya', 'ARTWORK', 'Artwork_ORS.pdf')] },
+      product,
+    );
+    await o.step(
+      1.5,
+      'lina',
+      'annexure',
+      {
+        action: 'RETURN',
+        comment:
+          'The regulator flagged the batch code font size. Design, please align the artwork too.',
+        privateTo: priv([c.mkt], ['DESIGN']),
+      },
+      product,
+    );
+    await o.step(
+      1,
+      'kabir',
+      'annexure',
+      {
+        action: 'SUBMIT',
+        uploads: [await file('kabir', 'ANNEXURE', 'Annexure_ORS_v2.pdf')],
+        comment: 'Bigger batch code. Production, check the coding machine can print this size.',
+        privateTo: priv([], ['PRODUCTION']),
+      },
+      product,
+    );
+    await o.step(
+      1,
+      'dev',
+      'artwork',
+      {
+        action: 'RETURN',
+        comment: 'The artwork still shows the old licence number.',
+        privateTo: priv([c.mkt]),
+      },
+      product,
+    );
+    made.push(o);
+  }
+
+  // D. Phase 3, payment check: a private invoice return and resubmit, a private payment note
+  {
+    const o = await order('priv-payment', 'gulf', 'ORS for Muscat, short payment expected', 45);
+    const c = await o.chain();
+    await phase1(o, { ...c, approvers: await o.slot('PI_APPROVER') }, ['ORS Sachets']);
     await phase2(o, ROWS, 'end');
     await o.step(1, 'tara', 'container', { action: 'SUBMIT', comment: '1 × 20ft, 9 pallets' });
-    await o.step(1, 'nisha', 'container', { action: 'CONFIRM' });
+    await o.step(1, c.mkt, 'container', { action: 'CONFIRM' });
     await o.step(1, 'tara', 'invoice', {
       action: 'SUBMIT',
       uploads: [await file('tara', 'INVOICE', 'Commercial_Invoice.pdf')],
     });
-    await o.step(1, 'nisha', 'invoice', { action: 'CONFIRM' });
-    await o.step(0.5, 'nisha', 'balance_requested', { action: 'LOG' });
-    await o.step(2, 'pooja', 'payment_check', { action: 'APPROVE', payment: payment('3400000') });
-    await o.step(0.5, 'nisha', 'payment_check', { action: 'APPROVE' });
-    await o.step(0.5, 'priya', 'payment_check', { action: 'APPROVE' });
-    await o.step(0.5, 'meera', 'payment_check', { action: 'APPROVE' });
-    await o.step(1, 'tara', 'sailed', { action: 'LOG', comment: 'Sailed from Nhava Sheva' });
-    await o.step(3, 'tara', 'tracking', {
+    await o.step(1, c.mkt, 'invoice', {
+      action: 'RETURN',
+      comment:
+        'The declared value doesn’t match the PI. Accounts, please confirm the value before Logistics resends.',
+      privateTo: priv([], ['ACCOUNTS']),
+    });
+    await o.step(1, 'tara', 'invoice', {
+      action: 'SUBMIT',
+      uploads: [await file('tara', 'INVOICE', 'Commercial_Invoice_v2.pdf')],
+      comment: 'Corrected value, matches the PI',
+      privateTo: priv([c.mkt], ['ACCOUNTS']),
+    });
+    await o.step(0.5, c.mkt, 'invoice', { action: 'CONFIRM' });
+    await o.step(0.5, c.mkt, 'balance_requested', { action: 'LOG' });
+    await o.step(2, 'pooja', 'payment_check', {
+      action: 'APPROVE',
+      payment: payment('3387500'),
+      uploads: [await file('pooja', 'PAYMENT_PROOF', 'Bank_credit_advice.pdf')],
+      comment: 'Received INR 12,500 short after bank charges. Buyer agreed to adjust next order.',
+      privateTo: priv([c.mkt]),
+    });
+    made.push(o);
+  }
+
+  // E. Phase 3, at sea: a private delay update for Marketing only
+  {
+    const o = await order('priv-sea', 'andes', 'Tablets for Lima', 62);
+    const c = await o.chain();
+    await phase1(o, { ...c, approvers: await o.slot('PI_APPROVER') }, [
+      'Paracetamol 500mg Tablets',
+    ]);
+    await phase2(o, ROWS, 'end');
+    await o.step(1, 'imran', 'container', { action: 'SUBMIT', comment: '1 × 40ft' });
+    await o.step(1, c.mkt, 'container', { action: 'CONFIRM' });
+    await o.step(1, 'imran', 'invoice', {
+      action: 'SUBMIT',
+      uploads: [await file('imran', 'INVOICE', 'Commercial_Invoice.pdf')],
+    });
+    await o.step(1, c.mkt, 'invoice', { action: 'CONFIRM' });
+    await o.step(0.5, c.mkt, 'balance_requested', { action: 'LOG' });
+    await o.step(2, 'pooja', 'payment_check', {
+      action: 'APPROVE',
+      payment: payment('4300000'),
+      uploads: [await file('pooja', 'PAYMENT_PROOF', 'Bank_credit_advice.pdf')],
+    });
+    await approveStage(o, 'payment_check', 'marketing', [c.mkt]);
+    await approveStage(o, 'payment_check', 'approver', await o.slot('PAY_APPROVER'));
+    await approveStage(o, 'payment_check', 'head', await o.slot('PAY_HEAD'));
+    await o.step(1, 'imran', 'sailed', { action: 'LOG', comment: 'Sailed from Nhava Sheva' });
+    await o.step(3, 'imran', 'tracking', {
       action: 'CHECKPOINT',
       shipmentStatus: 'IN_TRANSIT',
       comment: 'Transshipment at Colombo',
@@ -668,77 +1074,19 @@ export async function seedDemo(
     await o.step(4, 'imran', 'tracking', {
       action: 'CHECKPOINT',
       shipmentStatus: 'DELAYED',
-      comment: 'Congestion at Panama, about 3 days',
+      comment:
+        'Port congestion at Callao, maybe 5 days. Let’s not tell the buyer until it’s confirmed.',
+      privateTo: priv([c.mkt]),
     });
-    await o.step(2, 'imran', 'bol_requested', {
-      action: 'LOG',
-      comment: 'Buyer emailed for the BoL',
-    });
-    await o.step(0.5, 'imran', 'bol', {
-      action: 'COMPLETE',
-      uploads: [await file('imran', 'BOL', 'Bill_of_Lading.pdf')],
-    });
-    await o.step(0.5, 'tara', 'bol_approval', { action: 'APPROVE' });
-    await o.step(0.5, 'nisha', 'bol_approval', { action: 'APPROVE' });
-    await o.step(0.5, 'arjun', 'bol_approval', { action: 'APPROVE' });
-    made.push(o);
-  }
-  // 9. No Action Needed: BoL sent, still at sea
-  // 10. Done
-  for (const [key, buyerKey, startDays, close] of [
-    ['sent', 'kenya', 75, false],
-    ['done', 'andes', 95, true],
-  ] as const) {
-    const o = await order(key, buyerKey, 'Tablets', startDays);
-    await phase1(o, TPE, ['Paracetamol 500mg Tablets']);
-    await phase2(o, ROWS, 'end');
-    await o.step(1, 'imran', 'container', { action: 'SUBMIT', comment: '1 × 40ft' });
-    await o.step(1, 'rohan', 'container', { action: 'CONFIRM' });
-    await o.step(1, 'imran', 'invoice', {
-      action: 'SUBMIT',
-      uploads: [await file('imran', 'INVOICE', 'Commercial_Invoice.pdf')],
-    });
-    await o.step(1, 'rohan', 'invoice', { action: 'CONFIRM' });
-    await o.step(0.5, 'rohan', 'balance_requested', { action: 'LOG' });
-    await o.step(2, 'pooja', 'payment_check', { action: 'APPROVE', payment: payment('4300000') });
-    await o.step(0.5, 'rohan', 'payment_check', { action: 'APPROVE' });
-    await o.step(0.5, 'arjun', 'payment_check', { action: 'APPROVE' });
-    await o.step(0.5, 'meera', 'payment_check', { action: 'APPROVE' });
-    await o.step(1, 'imran', 'sailed', { action: 'LOG' });
-    await o.step(5, 'imran', 'tracking', {
-      action: 'CHECKPOINT',
-      shipmentStatus: 'IN_TRANSIT',
-      comment: 'On schedule',
-    });
-    await o.step(4, 'imran', 'bol_requested', { action: 'LOG' });
-    await o.step(0.5, 'imran', 'bol', {
-      action: 'COMPLETE',
-      uploads: [await file('imran', 'BOL', 'Bill_of_Lading.pdf')],
-    });
-    for (const who of ['pooja', 'rohan', 'priya', 'vikram', 'meera'])
-      await o.step(0.5, who, 'bol_approval', { action: 'APPROVE' });
-    await o.step(0.5, 'imran', 'bol_sent', { action: 'LOG', comment: 'Couriered original BoL' });
-    await o.step(3, 'imran', 'tracking', {
-      action: 'CHECKPOINT',
-      shipmentStatus: 'AT_PORT',
-      comment: 'Arrived at destination port',
-    });
-    if (close) {
-      await o.step(2, 'imran', 'tracking', {
-        action: 'CHECKPOINT',
-        shipmentStatus: 'CUSTOMS',
-        comment: 'Cleared customs',
-      });
-      await o.step(2, 'imran', 'delivered', {
-        action: 'CLOSE',
-        comment: 'Buyer confirmed receipt',
-      });
-    }
     made.push(o);
   }
 
   for (const o of made) await spreadOverDays(db, o.id, o.marks, o.startDaysAgo);
-  return { employees: Object.keys(users).length, buyers: BUYERS.length, orders: made.length };
+  return {
+    employees: Object.keys(users).filter((k) => !/^[0-9a-f-]{36}$/.test(k)).length,
+    buyers: BUYERS.length,
+    orders: made.length,
+  };
 }
 
 /**

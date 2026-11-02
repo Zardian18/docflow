@@ -183,6 +183,8 @@ export function WorkPage() {
             { tab: 'shared', label: 'Shared with you', count: work.data?.notices.length },
           ].map((t) => {
             const active = (shared ? 'shared' : (query.tab ?? '')) === t.tab;
+            // Unread shared messages stand out until they're read (D31)
+            const alert = t.tab === 'shared' && (t.count ?? 0) > 0;
             return (
               <button
                 key={t.tab || 'all'}
@@ -195,6 +197,7 @@ export function WorkPage() {
                   active
                     ? 'border-primary text-primary font-medium'
                     : 'text-muted-foreground hover:text-foreground border-transparent',
+                  alert && 'bg-primary-soft text-primary font-semibold',
                 )}
               >
                 {t.label}
@@ -202,7 +205,11 @@ export function WorkPage() {
                   <span
                     className={cn(
                       'rounded-full px-1.5 text-xs tabular-nums',
-                      active ? 'bg-primary-soft text-primary' : 'bg-muted text-muted-foreground',
+                      alert
+                        ? 'bg-primary text-primary-foreground font-semibold'
+                        : active
+                          ? 'bg-primary-soft text-primary'
+                          : 'bg-muted text-muted-foreground',
                     )}
                   >
                     {t.count}

@@ -553,7 +553,8 @@ export const EXPORT_ORDER_V1: Template = {
     PO: ['MATERIALS'],
   },
   docsByAccessOnly: ['PAYMENT_PROOF', 'PO'],
-  docsHiddenFromAdmin: ['PO'],
+  // D31: Admin sees everything again, POs included
+  docsHiddenFromAdmin: [],
   phasePrivacy: {
     phase: 2,
     involvedTeams: ['MATERIALS', 'DESIGN', 'REGULATION', 'PRODUCTION'],

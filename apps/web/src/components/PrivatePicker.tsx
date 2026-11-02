@@ -16,9 +16,11 @@ export interface PrivateValue {
  * the writer and Admin. Tagged people get a notice on My Work.
  */
 export function PrivatePicker({
+  orderId,
   value,
   onChange,
 }: {
+  orderId: string;
   value: PrivateValue | null;
   onChange: (v: PrivateValue | null) => void;
 }) {
@@ -46,10 +48,11 @@ export function PrivatePicker({
             label="Share with a person"
             anyLabel="Add a person"
             placeholder="Search by name"
-            queryKey="private-people"
+            queryKey={`share-candidates-${orderId}`}
             value={null}
             search={async (q, signal) =>
-              (await api.lookups.everyone(q, signal)).map((p) => ({
+              // Anyone in a team, and this order's Marketing and Creator (D31)
+              (await api.orders.shareCandidates(orderId, q, signal)).map((p) => ({
                 id: p.id,
                 label: p.name,
                 hint: p.email,

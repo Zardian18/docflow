@@ -998,6 +998,27 @@ function stepActors(ctx: OrderCtx, step: StepDef): Actor[] {
 }
 
 /**
+ * Who a private message can be shared with on this order (D31): anyone in a team; of the
+ * named roles without a team, only this order's Marketing and Creator. Approvers and Head
+ * Approvers aren't offered: they are always included. Admin isn't either: Admin sees all.
+ */
+export function shareableCondition(ctx: OrderCtx) {
+  const named = [...(ctx.slots.get('MARKETING') ?? []), ...(ctx.slots.get('CREATOR') ?? [])];
+  return and(
+    eq(employees.isActive, true),
+    sql`not exists (select 1 from ${employeeCapabilities} c where c.employee_id = ${employees.id} and c.capability in ('APPROVER', 'HEAD_APPROVER'))`,
+    sql`(exists (select 1 from ${teamMembers} m where m.employee_id = ${employees.id})${
+      named.length
+        ? sql` or ${employees.id} in (${sql.join(
+            named.map((id) => sql`${id}`),
+            sql`, `,
+          )})`
+        : sql``
+    })`,
+  );
+}
+
+/**
  * A private action (D29): who sees it is fixed now. The writer, the people and teams they
  * tagged, and everyone taking part in the step (so whoever gets the work back can read why).
  * Approvers, Head Approvers and Admin always see it too, checked when reading. Returns who
@@ -1012,6 +1033,18 @@ async function createAudience(
 ) {
   if (!input.privateTo) return null;
   const tagged = input.privateTo;
+  if (tagged.employeeIds.length > 0) {
+    const allowed = await tx
+      .select({ id: employees.id })
+      .from(employees)
+      .where(and(inArray(employees.id, tagged.employeeIds), shareableCondition(ctx)));
+    if (allowed.length !== new Set(tagged.employeeIds).size) {
+      throw badRequest(
+        'NOT_SHAREABLE',
+        'You can share with people in a team, or with this order’s Marketing person and Creator. Approvers and Head Approvers are always included.',
+      );
+    }
+  }
   const people = new Set<string>([writerId]);
   const teams = new Set<Team>();
   for (const a of stepActors(ctx, step)) {

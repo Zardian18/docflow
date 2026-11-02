@@ -24,6 +24,9 @@ test('a private send-back reaches only the people it is shared with (D29)', asyn
   const c = card(lina.page, /^Packaging annexure/);
   await c.getByLabel('Make this private').check();
   await c.getByRole('combobox', { name: /Share with a person/ }).click();
+  // Approvers and Head Approvers aren't offered: they're always included (D31)
+  await lina.page.getByPlaceholder('Search by name').fill('Priya');
+  await expect(lina.page.getByRole('option', { name: /Priya Shah/ })).toHaveCount(0);
   await lina.page.getByPlaceholder('Search by name').fill('Rohan');
   await lina.page.getByRole('option', { name: /Rohan Kapoor/ }).click();
   await expect(c.getByRole('list', { name: 'Shared with' })).toContainText('Rohan Kapoor');
@@ -36,6 +39,11 @@ test('a private send-back reaches only the people it is shared with (D29)', asyn
 
   // Rohan: a notice on My Work, and the message inside the otherwise hidden Phase 2
   const rohan = await signedIn(browser, 'rohan');
+  // Unread shared messages make the tab stand out
+  await rohan.page.goto('/work');
+  await expect(rohan.page.getByRole('tab', { name: /Shared with you/ })).toHaveClass(
+    /bg-primary-soft/,
+  );
   await rohan.page.goto('/work?tab=shared');
   const notice = rohan.page
     .getByRole('list', { name: 'Shared with you' })
@@ -61,21 +69,27 @@ test('a private send-back reaches only the people it is shared with (D29)', asyn
   await ananya.context.close();
 });
 
-test('raw material is marked ordered only once every component has its PO (D29)', async ({
+test('raw material is marked ordered only once every component has its PO, attached in one place (D31)', async ({
   browser,
 }) => {
   const { context, page } = await signedIn(browser, 'kabir');
   await openOrder(page, ORDERS.loops);
   const c = card(page, /^Order raw material · Amoxicillin/);
-  await expect(c.getByText('PO needed')).toBeVisible();
+  // The step has no upload of its own: it points to Purchase orders at the start of the chain
+  await expect(c.locator('input[type=file]')).toHaveCount(0);
+  await expect(c.getByRole('link', { name: 'Purchase orders' })).toBeVisible();
   await c.getByRole('button', { name: 'Raw material ordered' }).click();
   await expect(c.getByRole('alert')).toContainText('Upload the Purchase order (PO) for');
-  await c
+  const row = page
+    .getByRole('region', { name: /Purchase orders for each component/ })
+    .getByRole('listitem')
+    .filter({ hasText: 'Amoxicillin trihydrate' });
+  await expect(row.getByText('PO needed')).toBeVisible();
+  await row
     .locator('input[type=file]')
-    .first()
     .setInputFiles({ name: 'PO_amox.pdf', mimeType: 'application/pdf', buffer: pdf('PO') });
-  await expect(c.getByText('PO uploaded')).toBeVisible({ timeout: 30_000 });
-  await expect(c.getByRole('button', { name: 'View Purchase order (PO)' })).toBeVisible();
+  await expect(row.getByText('PO uploaded')).toBeVisible({ timeout: 30_000 });
+  await expect(row.getByRole('button', { name: 'View Purchase order (PO)' })).toBeVisible();
   await expectAccessible(page, 'PO uploads');
   await c.getByRole('button', { name: 'Raw material ordered' }).click();
   await expect(page.getByRole('region', { name: /^Order raw material · Amoxicillin/ })).toHaveCount(
@@ -102,7 +116,7 @@ test('the new pieces fit a phone screen (375px)', async ({ browser }) => {
   }
 });
 
-test('Purchase orders in the Chain tab: Materials attaches, Approvers view, nobody else (D30)', async ({
+test('Purchase orders in the Chain tab: Materials attaches, Approvers and Admin view (D31)', async ({
   browser,
 }) => {
   const area = (page: Page) =>
@@ -128,15 +142,19 @@ test('Purchase orders in the Chain tab: Materials attaches, Approvers view, nobo
   await expect(area(priya.page).getByText(/Drop the PO for/)).toHaveCount(0);
   await expect(priya.page.getByRole('tab', { name: 'Materials' })).toBeVisible();
   await priya.context.close();
-  // Admin and Marketing: no purchase orders at all
-  for (const [who, ref] of [
-    ['admin', ORDERS.delivery],
-    ['rohan', ORDERS.qa],
-  ] as const) {
-    const s = await signedIn(browser, who);
-    await openOrder(s.page, ref);
-    await expect(s.page.getByText('Phase 1 · Sales and PI')).toBeVisible();
-    await expect(area(s.page)).toHaveCount(0);
-    await s.context.close();
-  }
+  // Admin sees everything, POs and the Materials tab included (D31)
+  const admin = await signedIn(browser, 'admin');
+  await openOrder(admin.page, ORDERS.delivery);
+  await expect(
+    area(admin.page).getByRole('button', { name: 'View Purchase order (PO)' }).first(),
+  ).toBeVisible();
+  await expect(area(admin.page).getByText(/Drop the PO for/)).toHaveCount(0);
+  await expect(admin.page.getByRole('tab', { name: 'Materials' })).toBeVisible();
+  await admin.context.close();
+  // Marketing alone: no purchase orders at all
+  const rohan = await signedIn(browser, 'rohan');
+  await openOrder(rohan.page, ORDERS.qa);
+  await expect(rohan.page.getByText('Phase 1 · Sales and PI')).toBeVisible();
+  await expect(area(rohan.page)).toHaveCount(0);
+  await rohan.context.close();
 });
