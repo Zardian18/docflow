@@ -8,7 +8,8 @@
 //   pnpm --filter @docflow/api seed:demo --add-private
 //                                                 adds only the orders full of private messages
 //                                                 (D31) next to existing data, e.g. the live site;
-//                                                 checks the people and buyers it needs first
+//                                                 checks the people and buyers it needs first;
+//                                                 --people MATERIALS=Shraddha,… picks who acts
 // Uses the same storage as the API (STORAGE_DRIVER), so seeded files open in the app.
 import { randomBytes } from 'node:crypto';
 import { parseArgs } from 'node:util';
@@ -22,6 +23,8 @@ const { values } = parseArgs({
   options: {
     live: { type: 'boolean', default: false },
     'add-private': { type: 'boolean', default: false },
+    // e.g. MATERIALS=Shraddha,REGULATION=Dharmesh: who to act as per team (first names)
+    people: { type: 'string', default: '' },
   },
 });
 const env = loadEnv();
@@ -35,7 +38,14 @@ const { pool, db } = createDb(env.DATABASE_URL_DIRECT ?? env.DATABASE_URL);
 try {
   const storage = localStorageFromEnv(env)?.storage ?? storageFromEnv(env);
   if (values['add-private']) {
-    const added = await seedDemo(db, storage, { mode: 'add-private' });
+    const preferred = Object.fromEntries(
+      values.people
+        .split(',')
+        .map((pair) => pair.split('=').map((x) => x.trim()))
+        .filter((pair) => pair.length === 2 && pair[0] && pair[1])
+        .map(([team, name]) => [team!.toUpperCase(), name]),
+    );
+    const added = await seedDemo(db, storage, { mode: 'add-private', preferred });
     console.log(`Added ${added.orders} orders with private messages.`);
     process.exit(0);
   }
