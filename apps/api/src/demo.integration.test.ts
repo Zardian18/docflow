@@ -25,12 +25,12 @@ describe.skipIf(!TEST_DB_URL)('seed:demo (v2)', () => {
 
   it('loads orders parked in every phase through the real engine, spread over real days', async () => {
     const result = await seedDemo(db, storage);
-    expect(result.orders).toBe(10);
+    expect(result.orders).toBe(15);
     const { rows } = await db.execute<{ status: string; n: number }>(
       sql`select status::text, count(*)::int as n from orders group by status order by status`,
     );
     expect(rows).toEqual([
-      { status: 'ACTIVE', n: 8 },
+      { status: 'ACTIVE', n: 13 },
       { status: 'DONE', n: 1 },
       { status: 'NO_ACTION_NEEDED', n: 1 },
     ]);
@@ -71,4 +71,35 @@ describe.skipIf(!TEST_DB_URL)('seed:demo (v2)', () => {
   it('refuses to run on a database that already has data', async () => {
     await expect(seedDemo(db, storage)).rejects.toThrow(/only runs on an empty database/);
   });
+
+  it('adds the private-message orders next to existing data, as on the live site (D31)', async () => {
+    const before = await db.execute<{ n: number; p: number }>(
+      sql`select (select count(*)::int from orders) as n, (select count(*)::int from audiences) as p`,
+    );
+    const added = await seedDemo(db, storage, { mode: 'add-private' });
+    expect(added.orders).toBe(5);
+    const after = await db.execute<{ n: number; p: number }>(
+      sql`select (select count(*)::int from orders) as n, (select count(*)::int from audiences) as p`,
+    );
+    expect(after.rows[0]!.n).toBe(before.rows[0]!.n + 5);
+    expect(after.rows[0]!.p).toBeGreaterThan(before.rows[0]!.p);
+    // Five stages: CBM, PI approval, Phase 2 loops, payment check, at sea
+    const { rows } = await db.execute<{ number: number; steps: string }>(sql`
+      select o.number, string_agg(t.step_key || ':' || coalesce(t.side, ''), ',' order by t.step_key) as steps
+        from orders o join tasks t on t.order_id = o.id and t.status = 'OPEN'
+       where o.number > (select max(number) - 5 from orders)
+       group by o.number order by o.number`);
+    expect(rows.map((r) => r.steps)).toEqual([
+      'cbm:REVIEWER',
+      'pi_approval:head',
+      'annexure:REVIEWER,artwork:SUBMITTER,raw_material:',
+      'payment_check:marketing',
+      'bol_requested:,tracking:',
+    ]);
+    // Private messages were written in each, and people got notices
+    const { rows: n } = await db.execute<{ n: number }>(
+      sql`select count(*)::int as n from notices where kind = 'PRIVATE_MESSAGE'`,
+    );
+    expect(n[0]!.n).toBeGreaterThan(5);
+  }, 180_000);
 });

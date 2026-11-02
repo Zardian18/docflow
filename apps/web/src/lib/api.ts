@@ -167,9 +167,6 @@ export const api = {
       get(SlotAssignment.array(), `/v1/lookups/buyers/${id}/slots`, signal),
     buyers: (q: string, signal?: AbortSignal) =>
       get(BuyerOption.array(), `/v1/lookups/buyers?${listParams({ q })}`, signal),
-    /** Anyone active, to share a private message with (D29) */
-    everyone: (q: string, signal?: AbortSignal) =>
-      get(PersonOption.array(), `/v1/lookups/everyone?${listParams({ q })}`, signal),
   },
 
   orders: {
@@ -188,6 +185,9 @@ export const api = {
       id: string,
       body: { slot: Slot; fromEmployeeId: string; toEmployeeId: string; reason: string },
     ) => request(`/v1/orders/${id}/replace-person`, { method: 'POST', body }),
+    /** Who a private message on this order can be shared with (D31) */
+    shareCandidates: (id: string, q: string, signal?: AbortSignal) =>
+      get(PersonOption.array(), `/v1/orders/${id}/share-candidates?${listParams({ q })}`, signal),
     rename: (id: string, ref: string) =>
       request(`/v1/orders/${id}/ref`, { method: 'PUT', body: { ref } }),
     updateSlot: (id: string, slot: Slot, body: OrderSlotUpdate) =>

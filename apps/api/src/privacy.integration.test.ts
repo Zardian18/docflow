@@ -244,11 +244,11 @@ describe.skipIf(!TEST_DB_URL)('private messages, Phase 2 privacy, payment proof 
     // The secret send-back from earlier: approvers by role read it too
     const loops = await orderId('TPE/PI/26-27/0043');
     expect((await timeline('ravi', loops)).some((e) => e.comment === secret)).toBe(true);
-    // Admin sees the order but not the POs
+    // Admin sees everything too, POs and the Materials tab included (D31)
     const admin = await detail('admin', qa);
-    expect(admin.poAccess).toBe('NONE');
+    expect(admin).toMatchObject({ poAccess: 'VIEW', canSeeComponents: true });
     const adminTables = (await as.admin!.get(`/v1/orders/${qa}/components`)).json();
-    expect(adminTables.products[0].components[0]).toMatchObject({ po: null, hasPo: true });
+    expect(adminTables.products[0].components[0].po).toMatchObject({ kind: 'PO' });
   });
 
   it('Materials can attach POs, and nothing goes to Production until every component has one', async () => {
@@ -310,5 +310,44 @@ describe.skipIf(!TEST_DB_URL)('private messages, Phase 2 privacy, payment proof 
     expect(tables.products[0].components.find((c: { id: string }) => c.id === late).hasPo).toBe(
       true,
     );
+  });
+
+  it('a private message can be shared with team members and this order’s Marketing and Creator only (D31)', async () => {
+    const loops = await orderId('TPE/PI/26-27/0043');
+    const names = async (q = '') =>
+      (
+        (await as.lina!.get(`/v1/orders/${loops}/share-candidates?q=${q}`)).json() as Array<{
+          name: string;
+        }>
+      ).map((p) => p.name);
+    const all = [...(await names('a')), ...(await names('e')), ...(await names('i'))];
+    // In: this order's Marketing and Creator, and anyone in a team (Marketing + Design too)
+    for (const n of ['Rohan Kapoor', 'Sara Khan', 'Kabir Singh', 'Ananya Rao', 'Mira Both']) {
+      expect(all, n).toContain(n);
+    }
+    // Out: approvers (always included anyway), other orders' Marketing and Creator, Admin
+    for (const n of [
+      'Priya Shah',
+      'Vikram Malhotra',
+      'Ravi Role',
+      'Mohan Mix',
+      'Nisha Verma',
+      'Rahul Mehra',
+      'Anita Mehta',
+    ]) {
+      expect(all, n).not.toContain(n);
+    }
+    // The server refuses the same people
+    const task = (await detail('lina', loops)).tasks.find(
+      (t) => t.stepKey === 'artwork' && t.actions.includes('RETURN'),
+    )!;
+    for (const who of ['nisha', 'priya']) {
+      const res = await as.lina!.post(`/v1/tasks/${task.id}/actions`, {
+        action: 'RETURN',
+        comment: 'x',
+        privateTo: { employeeIds: [ids[who]], teams: [] },
+      });
+      expect(res.json().error, who).toBe('NOT_SHAREABLE');
+    }
   });
 });

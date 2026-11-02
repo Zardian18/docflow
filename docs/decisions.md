@@ -401,3 +401,15 @@ How to restore: `docs/runbook-backup.md`.
 - **POs gate progress:** "Raw material ordered" / "Packaging ordered" need every component of that type to have its PO, and **Materials complete** (the hand-over to Production) needs every component to have one, including components added later.
 - **Running orders upgraded:** unfinished v2 orders move to workflow v3 (migration 0014), which differs from v2 only by the PO rule. This is a deliberate exception to invariant 1, asked for by the owner. Finished orders keep v2.
 
+### D31 — Admin sees POs; one place for POs; who a private message can be shared with (owner, 2 Nov 2026)
+**Status: DECIDED.** Adjusts D29 and D30.
+- **Admin sees everything again,** the Materials tab and POs included (D30 had kept POs from Admin).
+- **POs are attached in one place:** the **Purchase orders** area at the start of the Chain tab, with every component of every product. The ordering steps no longer have their own PO upload; they point to that area and still refuse "ordered" until each component has its PO.
+- **Who can be tagged in a private message:**
+  - anyone in a team;
+  - of the named roles without a team, only **this order's** Marketing person and Creator.
+  - Approvers and Head Approvers aren't offered, since they are always included. Admin isn't either.
+  - The server refuses anyone else (`NOT_SHAREABLE`).
+- **"Shared with you"** on My Work is highlighted while it holds unread messages.
+- **More demo data:** 5 extra demo orders full of private messages, one each at the CBM, PI approval (with the Head), Phase 2 review loops, the payment check, and at sea. `seed:demo --add-private` adds them next to existing data (the live site) using each buyer's current chain. It checks the people and buyers it needs before writing anything.
+

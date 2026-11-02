@@ -12,6 +12,7 @@ import {
   OrderSlotUpdate,
   OrderSummary,
   paginated,
+  PersonOption,
   RenameOrderRequest,
   ReplaceSlotPersonRequest,
   Slot,
@@ -51,6 +52,7 @@ import {
   createOrder,
   renameOrder,
   replaceSlotPerson,
+  shareableCondition,
   updateOrderSlot,
 } from '../engine/engine.js';
 import {
@@ -420,6 +422,33 @@ export const orderRoutes: FastifyPluginAsyncZod<RouteDeps & { storage: StorageSe
     '/v1/work',
     { schema: { querystring: WorkQuery, response: { 200: WorkResponse } } },
     async (request) => myWork(db, currentUser(request), request.query),
+  );
+
+  // People a private message on this order can be shared with (D31)
+  app.get(
+    '/v1/orders/:id/share-candidates',
+    {
+      schema: {
+        params: IdParam,
+        querystring: z.object({ q: z.string().trim().max(100).default('') }),
+        response: { 200: PersonOption.array() },
+      },
+    },
+    async (request) => {
+      const ctx = await visibleCtx(db, currentUser(request), request.params.id);
+      const q = request.query.q;
+      return db
+        .select({ id: employees.id, name: employees.name, email: employees.email })
+        .from(employees)
+        .where(
+          and(
+            shareableCondition(ctx),
+            q ? sql`lower(${employees.name}) like ${containsPattern(q)}` : undefined,
+          ),
+        )
+        .orderBy(asc(sql`lower(${employees.name})`))
+        .limit(20);
+    },
   );
 
   // A notice on My Work, marked read (D29)
