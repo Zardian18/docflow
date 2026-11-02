@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Db } from './db/client.js';
 import { DEMO_PASSWORD, demoEmail, seedDemo } from './demo/seed.js';
 import { MemoryStorage } from './storage/memory.js';
-import { Client, resetDb, setupTestDb, TEST_DB_URL, testApp } from './test-db.js';
+import { Client, createEmployee, resetDb, setupTestDb, TEST_DB_URL, testApp } from './test-db.js';
 
 describe.skipIf(!TEST_DB_URL)('seed:demo (v2)', () => {
   let db: Db;
@@ -76,7 +76,16 @@ describe.skipIf(!TEST_DB_URL)('seed:demo (v2)', () => {
     const before = await db.execute<{ n: number; p: number }>(
       sql`select (select count(*)::int from orders) as n, (select count(*)::int from audiences) as p`,
     );
-    const added = await seedDemo(db, storage, { mode: 'add-private' });
+    // Who acts can be chosen per team by first name; the rest fall back to anyone in the team
+    const zoe = await createEmployee(db, {
+      name: 'Zoe Materials',
+      email: 'zoe@t.co',
+      teams: ['MATERIALS'],
+    });
+    const added = await seedDemo(db, storage, {
+      mode: 'add-private',
+      preferred: { MATERIALS: 'zoe', DESIGN: 'Nobody-By-This-Name' },
+    });
     expect(added.orders).toBe(5);
     const after = await db.execute<{ n: number; p: number }>(
       sql`select (select count(*)::int from orders) as n, (select count(*)::int from audiences) as p`,
@@ -101,5 +110,9 @@ describe.skipIf(!TEST_DB_URL)('seed:demo (v2)', () => {
       sql`select count(*)::int as n from notices where kind = 'PRIVATE_MESSAGE'`,
     );
     expect(n[0]!.n).toBeGreaterThan(5);
+    const { rows: acted } = await db.execute<{ n: number }>(
+      sql`select count(*)::int as n from order_events where actor_id = ${zoe} and acting_as = 'MATERIALS'`,
+    );
+    expect(acted[0]!.n).toBeGreaterThan(0);
   }, 180_000);
 });

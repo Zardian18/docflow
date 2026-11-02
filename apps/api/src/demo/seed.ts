@@ -178,6 +178,7 @@ export async function seedDemo(
     password = DEMO_PASSWORD,
     withAdmin = true,
     mode = 'full',
+    preferred = {},
   }: {
     password?: string;
     withAdmin?: boolean;
@@ -186,9 +187,11 @@ export async function seedDemo(
      * messages (D31), added next to existing data, using the people and buyers already there.
      */
     mode?: 'full' | 'add-private';
+    /** add-private: who to act as per team, by first name (others: anyone in the team) */
+    preferred?: PreferredPeople;
   } = {},
 ) {
-  if (mode === 'add-private') return addPrivateOrders(db, storage);
+  if (mode === 'add-private') return addPrivateOrders(db, storage, preferred);
   const [{ others } = { others: 0 }] = await db
     .select({ others: count() })
     .from(employees)
@@ -277,39 +280,44 @@ async function loadUser(db: Db, id: string): Promise<AuthUser> {
   };
 }
 
-/** The team members the private-message orders need, by demo account (D31) */
-const TEAM_PEOPLE: Array<[string, Team[]]> = [
-  ['kabir', ['MATERIALS']],
-  ['neha', ['MATERIALS']],
-  ['lina', ['REGULATION']],
-  ['dev', ['REGULATION', 'PRODUCTION']],
-  ['ananya', ['DESIGN']],
-  ['farhan', ['PRODUCTION']],
-  ['pooja', ['ACCOUNTS']],
-  ['imran', ['LOGISTICS']],
-  ['tara', ['LOGISTICS', 'ACCOUNTS']],
+/** The team each demo role acts as in the private-message orders (D31) */
+const TEAM_PEOPLE: Array<[string, Team]> = [
+  ['kabir', 'MATERIALS'],
+  ['neha', 'MATERIALS'],
+  ['lina', 'REGULATION'],
+  ['dev', 'REGULATION'],
+  ['ananya', 'DESIGN'],
+  ['farhan', 'PRODUCTION'],
+  ['pooja', 'ACCOUNTS'],
+  ['imran', 'LOGISTICS'],
+  ['tara', 'LOGISTICS'],
 ];
+
+/** Who to act as, per team, on the live site: a first name to look for (D31) */
+export type PreferredPeople = Partial<Record<Team, string>>;
 
 /**
  * Adds only the private-message orders (D31) to a database that already has data, e.g. the
  * live site: the demo team members and buyers must exist; the chains are whatever the buyers
  * have now. Checks everything before writing anything.
  */
-async function addPrivateOrders(db: Db, storage: StorageService) {
+async function addPrivateOrders(db: Db, storage: StorageService, preferred: PreferredPeople) {
   const users: Record<string, AuthUser> = {};
   const problems: string[] = [];
-  for (const [key, teams] of TEAM_PEOPLE) {
-    const { rows } = await db.execute<{ id: string }>(
-      sql`select id from employees where lower(email) = ${demoEmail(key)} and is_active`,
-    );
+  for (const [key, team] of TEAM_PEOPLE) {
+    // The person asked for by first name, else the demo account, else anyone in the team
+    const { rows } = await db.execute<{ id: string }>(sql`
+      select e.id from employees e join team_members m on m.employee_id = e.id
+       where e.is_active and m.team = ${team}
+       order by (lower(e.name) like ${`${(preferred[team] ?? '').toLowerCase()}%`} and ${!!preferred[team]}) desc,
+                (lower(e.email) = ${demoEmail(key)}) desc,
+                lower(e.name)
+       limit 1`);
     if (!rows[0]) {
-      problems.push(`${demoEmail(key)} is missing or inactive`);
+      problems.push(`nobody active is in ${team}`);
       continue;
     }
-    const u = await loadUser(db, rows[0].id);
-    const lacking = teams.filter((t) => !u.teams.includes(t));
-    if (lacking.length) problems.push(`${u.name} is not in ${lacking.join(', ')}`);
-    users[key] = u;
+    users[key] = await loadUser(db, rows[0].id);
   }
   const buyerIds: Record<string, string> = {};
   for (const b of BUYERS) {
@@ -322,6 +330,9 @@ async function addPrivateOrders(db: Db, storage: StorageService) {
   if (problems.length) {
     throw new Error(`Nothing was added. Fix these first:\n- ${problems.join('\n- ')}`);
   }
+  console.log(
+    `Acting as: ${[...new Set(TEAM_PEOPLE.map(([k, t]) => `${users[k]!.name} (${t})`))].join(', ')}`,
+  );
   return runScenarios(db, storage, users, buyerIds, 'add-private');
 }
 
@@ -654,7 +665,7 @@ async function runScenarios(
       action: 'SUBMIT',
       comment: 'Replaced damaged cartons',
     });
-    await o.step(1, 'dev', 'production_qa', { action: 'CONFIRM', comment: 'Materials fine' });
+    await o.step(1, 'farhan', 'production_qa', { action: 'CONFIRM', comment: 'Materials fine' });
   }
 
   const ROWS = {
