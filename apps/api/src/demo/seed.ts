@@ -479,15 +479,13 @@ async function runScenarios(
       action: 'LOG',
       comment: 'Confirmed on call',
     });
-    // The Creator renames the order to the PI's number (D27)
+    // The Creator renames the order to the PI's number (D27); only the PI with rates goes for
+    // approval, the version without rates follows once it's approved (D32)
     await o.step(1, who.creator, 'pi', {
       action: 'COMPLETE',
       products,
       orderRef: o.piRef(),
-      uploads: [
-        await file(who.creator, 'PI_FULL', 'PI_full.pdf'),
-        await file(who.creator, 'PI_NO_RATES', 'PI_quantities_only.pdf'),
-      ],
+      uploads: [await file(who.creator, 'PI_FULL', 'PI_full.pdf')],
     });
     await o.step(0.5, who.mkt, 'pi_approval', { action: 'APPROVE' });
     if (opts.rejectPi) {
@@ -507,6 +505,10 @@ async function runScenarios(
     await approveStage(o, 'pi_approval', 'approver', who.approvers ?? [who.approver], 1);
     if (opts.stop === 'head') return;
     await approveStage(o, 'pi_approval', 'head', who.heads);
+    await o.step(0.5, who.creator, 'pi_no_rates', {
+      action: 'COMPLETE',
+      uploads: [await file(who.creator, 'PI_NO_RATES', 'PI_quantities_only.pdf')],
+    });
     await o.step(0.5, who.mkt, 'advance_requested', { action: 'LOG' });
     if (opts.stop === 'advance') return;
     await o.step(2, 'pooja', 'advance_verified', {
@@ -930,10 +932,7 @@ async function runScenarios(
       action: 'COMPLETE',
       products: ['Paracetamol 500mg Tablets'],
       orderRef: o.piRef(),
-      uploads: [
-        await file(c.creator, 'PI_FULL', 'PI_full.pdf'),
-        await file(c.creator, 'PI_NO_RATES', 'PI_quantities_only.pdf'),
-      ],
+      uploads: [await file(c.creator, 'PI_FULL', 'PI_full.pdf')],
     });
     await o.step(0.5, c.mkt, 'pi_approval', { action: 'APPROVE' });
     await o.step(1, c.approver, 'pi_approval', {

@@ -11,7 +11,7 @@ import {
   type DayCount,
   type Tag,
 } from '@docflow/shared';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { History, Pencil, Plus } from 'lucide-react';
 import { useId, useState } from 'react';
 import { toast } from 'sonner';
@@ -39,6 +39,7 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { api, errorMessage } from '@/lib/api';
+import { useRefreshOrder } from '@/lib/refresh';
 import { formatDate, formatDateTime } from '@/lib/format';
 import { clockText, days } from '@/lib/labels';
 import type { PillTone } from '@/components/StatusPill';
@@ -119,7 +120,7 @@ function ComponentDialog({
   onOpenChange: (o: boolean) => void;
 }) {
   const id = useId();
-  const queryClient = useQueryClient();
+  const refresh = useRefreshOrder(orderId, ['components', 'order', 'timeline', 'work']);
   const [draft, setDraft] = useState<Draft>(row ? fromRow(row) : blank());
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft((d) => ({ ...d, [k]: v }));
   const save = useMutation({
@@ -131,14 +132,7 @@ function ComponentDialog({
     },
     onSuccess: () => {
       toast.success(row ? `Saved ${draft.name}` : `Added ${draft.name}`);
-      for (const key of [
-        ['components', orderId],
-        ['order', orderId],
-        ['order-timeline', orderId],
-        ['work'],
-      ]) {
-        queryClient.invalidateQueries({ queryKey: key });
-      }
+      void refresh();
       onOpenChange(false);
     },
   });

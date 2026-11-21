@@ -22,7 +22,7 @@ async function upload(page: Page, scope: ReturnType<Page['locator']>, name: stri
   await expect(scope.getByText('Uploaded').first()).toBeVisible({ timeout: 30_000 });
 }
 
-test('Phase 1 in the browser: order, CBM loop, PI with both versions, approvals, advance', async ({
+test('Phase 1 in the browser: order, CBM loop, PI with rates, approvals, PI without rates, advance', async ({
   browser,
 }) => {
   // Marketing creates the order; the buyer's default chain is filled in (D27)
@@ -72,21 +72,16 @@ test('Phase 1 in the browser: order, CBM loop, PI with both versions, approvals,
     .click();
   await expect(rohan.page.getByText(/0 days · since/).first()).toBeVisible();
 
-  // The PI: both versions and the products
+  // The PI with rates and the products; the version without rates comes after approval (D32)
   await sara.page.reload();
   c = card(sara.page, /^Proforma Invoice/);
   await c.getByRole('button', { name: 'Submit PI for approval' }).click();
   await expect(c.getByRole('alert')).toContainText('Attach the PI (full)');
-  const zones = c.locator('input[type=file]');
-  await zones
-    .nth(0)
+  await expect(c.locator('input[type=file]')).toHaveCount(1);
+  await c
+    .locator('input[type=file]')
     .setInputFiles({ name: 'PI.pdf', mimeType: 'application/pdf', buffer: pdf('PI') });
-  await zones.nth(1).setInputFiles({
-    name: 'PI_no_rates.pdf',
-    mimeType: 'application/pdf',
-    buffer: pdf('PI no rates'),
-  });
-  await expect(c.getByText('Uploaded')).toHaveCount(2, { timeout: 30_000 });
+  await expect(c.getByText('Uploaded')).toHaveCount(1, { timeout: 30_000 });
   await c
     .getByLabel('Products on this order, one per line')
     .fill('Paracetamol 500mg Tablets\nORS Sachets');
@@ -98,14 +93,31 @@ test('Phase 1 in the browser: order, CBM loop, PI with both versions, approvals,
   await expect(sara.page.getByRole('heading', { name: /TPE\/PI\/26-27\/0100/ })).toBeVisible();
 
   // Marketing → Approver → Head Approver
-  for (const who of ['rohan', 'priya', 'vikram'] as const) {
+  const approvers = [
+    ['rohan', 'Rohan Kapoor'],
+    ['priya', 'Priya Shah'],
+    ['vikram', 'Vikram Malhotra'],
+  ] as const;
+  for (const [who, name] of approvers) {
     const s = who === 'rohan' ? rohan : await as(browser, who, orderUrl);
     await s.page.reload();
     await card(s.page, /^PI approval/)
       .getByRole('button', { name: 'Approve', exact: true })
       .click();
-    await expect(s.page.getByText(/approved by/).first()).toBeVisible();
+    // This person's own vote, not an earlier one, before the next person looks
+    await expect(s.page.getByText(`approved by ${name}`).first()).toBeVisible();
   }
+  // Approved: now the Creator uploads the PI without rates, with no approval of its own
+  await sara.page.reload();
+  c = card(sara.page, /^PI without rates/);
+  await c.locator('input[type=file]').setInputFiles({
+    name: 'PI_no_rates.pdf',
+    mimeType: 'application/pdf',
+    buffer: pdf('PI no rates'),
+  });
+  await expect(c.getByText('Uploaded')).toHaveCount(1, { timeout: 30_000 });
+  await c.getByRole('button', { name: 'Upload PI without rates' }).click();
+  await expect(sara.page.getByText('With Marketing: Rohan Kapoor')).toBeVisible();
   await rohan.page.reload();
   await card(rohan.page, /PI sent, advance requested/)
     .getByRole('button', { name: 'Advance requested' })

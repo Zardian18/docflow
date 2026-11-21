@@ -16,8 +16,9 @@ import type { AuthUser } from '../auth/sessions.js';
 import type { Db } from '../db/client.js';
 import { buyers, documents, employees, notices, orders } from '../db/schema.js';
 import { sinceClock } from './clock.js';
-import { loadCtx } from './engine.js';
-import { privacyFor, reviewDocsFor } from './views.js';
+import { canSeeOrder } from './access.js';
+import { actionsOfKind, loadCtxs } from './engine.js';
+import { privacyForMany, reviewDocsFor } from './views.js';
 
 type Query = z.output<typeof WorkQuery>;
 
@@ -81,7 +82,31 @@ export async function myWork(db: Db, user: AuthUser, query: Query): Promise<Work
              select 1 from approval_votes v
               where v.task_id = t.id and v.run = t.run and v.stage = t.side and v.employee_id = ${user.id})`;
 
-  const { rows: all } = await db.execute<Row>(base);
+  // Messages and files shared with this person, until they mark them read (D29)
+  const [{ rows: all }, unread] = await Promise.all([
+    db.execute<Row>(base),
+    db
+      .select({
+        id: notices.id,
+        kind: notices.kind,
+        orderId: notices.orderId,
+        orderRef: orders.ref,
+        buyerName: buyers.name,
+        taskId: notices.taskId,
+        audienceId: notices.audienceId,
+        title: notices.title,
+        actorName: employees.name,
+        comment: notices.comment,
+        at: notices.createdAt,
+      })
+      .from(notices)
+      .innerJoin(orders, eq(orders.id, notices.orderId))
+      .innerJoin(buyers, eq(buyers.id, orders.buyerId))
+      .leftJoin(employees, eq(employees.id, notices.actorId))
+      .where(and(eq(notices.employeeId, user.id), isNull(notices.readAt)))
+      .orderBy(desc(notices.createdAt))
+      .limit(100),
+  ]);
 
   const keep = (r: Row) => {
     if (query.tab === 'NAMED' && !r.holder_slot) return false;
@@ -121,17 +146,19 @@ export async function myWork(db: Db, user: AuthUser, query: Query): Promise<Work
 
   // The latest document each step is about, so it opens straight from the dashboard (D27)
   const orderIds = [...new Set(shown.map((r) => r.order_id))];
-  const [ctxs, docs] = await Promise.all([
-    Promise.all(orderIds.map((id) => loadCtx(db, id))),
+  const [ctxOf, docs] = await Promise.all([
+    loadCtxs(db, [...orderIds, ...unread.map((n) => n.orderId)]),
     orderIds.length
       ? db.select().from(documents).where(inArray(documents.orderId, orderIds))
       : Promise.resolve([]),
   ]);
-  const ctxOf = new Map(ctxs.map((c) => [c.order.id, c]));
+  const privacies = await privacyForMany(db, user, [...ctxOf.values()]);
   // Only documents this person may open: by kind, phase and private audience (D29)
-  const privacies = new Map(
-    await Promise.all(ctxs.map(async (c) => [c.order.id, await privacyFor(db, user, c)] as const)),
-  );
+  const docsOf = new Map<string, typeof docs>();
+  for (const d of docs) {
+    if (privacies.get(d.orderId)!.seesDoc(d))
+      docsOf.set(d.orderId, [...(docsOf.get(d.orderId) ?? []), d]);
+  }
 
   const items = shown
     .sort((a, b) => {
@@ -169,12 +196,12 @@ export async function myWork(db: Db, user: AuthUser, query: Query): Promise<Work
         },
         trackerA: sinceClock(r.production_started_at ? new Date(r.production_started_at) : null),
         trackerB: sinceClock(r.chain_started_at ? new Date(r.chain_started_at) : null),
-        actions: actionsFromKind(step.kind, r.side),
+        actions: actionsOfKind(step.kind, r.side),
         documents: reviewDocsFor(
           user,
           ctxOf.get(r.order_id)!,
           { id: r.task_id, stepKey: r.step_key },
-          docs.filter((d) => d.orderId === r.order_id && privacies.get(r.order_id)!.seesDoc(d)),
+          docsOf.get(r.order_id) ?? [],
         ),
       };
     });
@@ -192,32 +219,20 @@ export async function myWork(db: Db, user: AuthUser, query: Query): Promise<Work
   ];
   const uniq = <T extends { id: string; name: string }>(list: T[]) =>
     [...new Map(list.map((x) => [x.id, x])).values()].sort((a, b) => a.name.localeCompare(b.name));
-  // Messages and files shared with this person, until they mark them read (D29)
-  const unread = await db
-    .select({
-      id: notices.id,
-      kind: notices.kind,
-      orderId: notices.orderId,
-      orderRef: orders.ref,
-      buyerName: buyers.name,
-      taskId: notices.taskId,
-      title: notices.title,
-      actorName: employees.name,
-      comment: notices.comment,
-      at: notices.createdAt,
-    })
-    .from(notices)
-    .innerJoin(orders, eq(orders.id, notices.orderId))
-    .innerJoin(buyers, eq(buyers.id, orders.buyerId))
-    .leftJoin(employees, eq(employees.id, notices.actorId))
-    .where(and(eq(notices.employeeId, user.id), isNull(notices.readAt)))
-    .orderBy(desc(notices.createdAt))
-    .limit(100);
+  // A notice shows only while its order and message are still open to this person (F7)
+  const stillShared = (n: (typeof unread)[number]) => {
+    const ctx = ctxOf.get(n.orderId);
+    return (
+      !!ctx && canSeeOrder(user, ctx) && privacies.get(n.orderId)!.seesPart(n.taskId, n.audienceId)
+    );
+  };
   return {
     items,
     tabs,
     buyers: uniq(all.map((r) => ({ id: r.buyer_id, name: r.buyer_name }))),
-    notices: unread.map((n) => ({ ...n, at: n.at.toISOString() })),
+    notices: unread
+      .filter(stillShared)
+      .map(({ audienceId: _audience, ...n }) => ({ ...n, at: n.at.toISOString() })),
   };
 }
 
@@ -229,23 +244,4 @@ export async function markNoticeRead(db: Db, user: AuthUser, noticeId: string) {
     .where(and(eq(notices.id, noticeId), eq(notices.employeeId, user.id)))
     .returning({ id: notices.id });
   return Boolean(row);
-}
-
-function actionsFromKind(kind: string, side: string | null): string[] {
-  switch (kind) {
-    case 'TASK':
-      return ['COMPLETE'];
-    case 'REVIEW_LOOP':
-      return side === 'REVIEWER' ? ['CONFIRM', 'RETURN'] : ['SUBMIT'];
-    case 'APPROVAL_CHAIN':
-      return ['APPROVE', 'REJECT'];
-    case 'STATUS_LOG':
-      return ['LOG'];
-    case 'CHECKPOINT_LOG':
-      return ['CHECKPOINT'];
-    case 'CLOSE':
-      return ['CLOSE'];
-    default:
-      return [];
-  }
 }

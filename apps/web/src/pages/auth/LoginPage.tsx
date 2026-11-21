@@ -12,9 +12,18 @@ import { meQueryKey, useMe } from '@/lib/auth';
 import { homeFor } from '@/lib/people';
 import { AuthCard } from './AuthCard';
 
-/** Only follow same-app relative paths after login (no open redirects). */
+/**
+ * Only follow paths within this app after login (no open redirects). Resolving against our own
+ * origin also catches `/\evil.com`, which browsers read as `//evil.com`.
+ */
 function safeNext(next: string | null): string | null {
-  return next && next.startsWith('/') && !next.startsWith('//') ? next : null;
+  if (!next?.startsWith('/')) return null;
+  try {
+    const url = new URL(next, window.location.origin);
+    return url.origin === window.location.origin ? url.pathname + url.search + url.hash : null;
+  } catch {
+    return null;
+  }
 }
 
 export function LoginPage() {

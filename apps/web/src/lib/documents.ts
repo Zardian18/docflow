@@ -1,9 +1,6 @@
 import { toast } from 'sonner';
 import { api, errorMessage } from '@/lib/api';
 
-/** Files the browser can show itself; everything else is only downloaded */
-export const canView = (mime: string) => mime === 'application/pdf' || mime.startsWith('image/');
-
 /** Opens a document in a new tab (view) or saves it (download), with a short-lived link */
 export async function openDocument(id: string, mode: 'view' | 'download') {
   try {

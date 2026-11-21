@@ -212,8 +212,10 @@ export const buyerRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db })
     },
   );
 
-  // Only for buyers with no orders (D21)
+  // Only for buyers with no orders (D21); Marketing may create and edit buyers, only Admin
+  // deletes them, since that also removes the Admin-set default chain (D33)
   app.delete('/:id', { schema: { params: IdParam } }, async (request, reply) => {
+    if (!currentUser(request).capabilities.includes('ADMIN')) throw forbidden();
     await deleteBuyer(db, request.params.id);
     return reply.code(204).send();
   });

@@ -25,6 +25,7 @@ describe.skipIf(!TEST_DB_URL)('private messages, Phase 2 privacy, payment proof 
     'rohan',
     'nisha',
     'rahul',
+    'sara',
     'priya',
     'arjun',
     'vikram',
@@ -87,6 +88,7 @@ describe.skipIf(!TEST_DB_URL)('private messages, Phase 2 privacy, payment proof 
     (await as[who]!.get(`/v1/orders/${id}/timeline`)).json() as Array<{
       type: string;
       stepKey: string | null;
+      taskId: string | null;
       comment: string | null;
       privateTo: string[] | null;
     }>;
@@ -137,13 +139,22 @@ describe.skipIf(!TEST_DB_URL)('private messages, Phase 2 privacy, payment proof 
 
     const verdictOf = (d: OrderDetail) =>
       d.rounds.find((r) => r.taskId === annexure.id && r.verdictComment === secret);
+    // Shared with: the tagged Marketing person and, by default, the order's approvers (D32)
+    const sharedWith = [
+      'Arjun Nair',
+      'Meera Kulkarni',
+      'Priya Shah',
+      'Rohan Kapoor',
+      'Vikram Malhotra',
+    ];
     // In it: the writer, Materials (gets the work back), the tagged Marketing person, the
     // approvers and Head Approvers, Admin
     for (const who of ['lina', 'kabir', 'rohan', 'priya', 'vikram', 'admin']) {
       const d = await detail(who, loops);
-      expect(verdictOf(d), who).toMatchObject({ verdictPrivateTo: ['Rohan Kapoor'] });
+      expect([...(verdictOf(d)?.verdictPrivateTo ?? [])].sort(), who).toEqual(sharedWith);
       const e = (await timeline(who, loops)).find((x) => x.comment === secret);
-      expect(e, who).toMatchObject({ type: 'RETURNED', privateTo: ['Rohan Kapoor'] });
+      expect(e?.type, who).toBe('RETURNED');
+      expect([...(e?.privateTo ?? [])].sort(), who).toEqual(sharedWith);
     }
     // Not in it: nothing at all, not even that something was returned
     for (const who of ['ananya', 'farhan', 'mira']) {
@@ -310,6 +321,98 @@ describe.skipIf(!TEST_DB_URL)('private messages, Phase 2 privacy, payment proof 
     expect(tables.products[0].components.find((c: { id: string }) => c.id === late).hasPo).toBe(
       true,
     );
+  });
+
+  it('the approvers on an order, in any slot, are tagged in every private message by default (D32)', async () => {
+    // Mohan holds Marketing and Head Approver, and is this order's Marketing person
+    const [mohan] = (
+      await db.execute<{ id: string }>(sql`select id from employees where email = 'mohan@t.co'`)
+    ).rows;
+    ids.mohan = mohan!.id;
+    const [buyer] = (
+      await db.execute<{ id: string }>(sql`select id from buyers order by name limit 1`)
+    ).rows;
+    const created = await as.mohan!.post('/v1/orders', {
+      buyerId: buyer!.id,
+      slots: [{ slot: 'MARKETING', employeeIds: [ids.mohan] }],
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    const order = created.json().id as string;
+    const chain = (await detail('admin', order)).slots;
+    const approverNames = chain
+      .filter((s) => s.slot.endsWith('_APPROVER') || s.slot.endsWith('_HEAD'))
+      .flatMap((s) => s.people.map((p) => p.name));
+    const creatorSlot = chain.find((s) => s.slot === 'CREATOR')!.people[0]!;
+    const creator = creatorSlot.name;
+    const writer = Object.keys(ids).find((k) => ids[k] === creatorSlot.id)!;
+    const cbm = (await detail(writer, order)).tasks.find((t) => t.stepKey === 'cbm')!;
+    const presign = await as[writer]!.post('/v1/uploads/presign', {
+      fileName: 'cbm.pdf',
+      contentType: PDF,
+      size: pdf.length,
+    });
+    const { uploadId } = presign.json();
+    const key = await db.execute<{ object_key: string }>(
+      sql`select object_key from uploads where id = ${uploadId}`,
+    );
+    storage.upload(key.rows[0]!.object_key, pdf, PDF);
+    const note = 'Carton count is a guess (private, D32)';
+    const res = await as[writer]!.post(`/v1/tasks/${cbm.id}/actions`, {
+      action: 'SUBMIT',
+      comment: note,
+      uploads: [{ uploadId, kind: 'CBM' }],
+      privateTo: { employeeIds: [], teams: ['ACCOUNTS'] },
+    });
+    expect(res.statusCode, res.body).toBe(204);
+
+    // Shared with: the tagged team, every approver on the order and Mohan, not the writer
+    const expected = [...new Set([...approverNames, 'Mohan Mix'])].sort();
+    const e = (await timeline('mohan', order)).find((x) => x.comment === note)!;
+    expect(e.privateTo!.filter((l) => l !== 'Accounts').sort()).toEqual(expected);
+    expect(e.privateTo).toContain('Accounts');
+    expect(e.privateTo).not.toContain(creator);
+    // Each of them gets a notice; an Approver by role who isn't on the order reads it, no notice
+    const noticed = async (who: string) =>
+      ((await as[who]!.get('/v1/work')).json().notices as Array<{ comment: string | null }>).some(
+        (n) => n.comment === note,
+      );
+    expect(await noticed('mohan')).toBe(true);
+    const approverKeys = chain
+      .filter((s) => s.slot.endsWith('_APPROVER') || s.slot.endsWith('_HEAD'))
+      .flatMap((s) => s.people.map((p) => Object.keys(ids).find((k) => ids[k] === p.id)!));
+    for (const who of new Set(approverKeys)) expect(await noticed(who), who).toBe(true);
+    expect(await noticed('ravi')).toBe(false);
+    expect((await timeline('ravi', order)).some((x) => x.comment === note)).toBe(true);
+  });
+
+  it('Marketing alone reads no Phase 2 message, private or not, unless tagged in it (D32)', async () => {
+    const list = (await as.rohan!.get('/v1/orders?pageSize=100')).json().items as Array<{
+      id: string;
+    }>;
+    let phase2Comments = 0;
+    for (const { id } of list) {
+      const phase2 = new Set(
+        (await detail('admin', id)).tasks.filter((t) => t.phase === 2).map((t) => t.id),
+      );
+      const all = await timeline('admin', id);
+      phase2Comments += all.filter(
+        (e) => e.comment && e.stepKey && phase2.has(e.taskId ?? ''),
+      ).length;
+      for (const e of await timeline('rohan', id)) {
+        const inPhase2 = phase2.has(e.taskId ?? '');
+        if (inPhase2 && e.comment) expect(e.privateTo, e.comment).toContain('Rohan Kapoor');
+      }
+      for (const r of (await detail('rohan', id)).rounds) {
+        if (!phase2.has(r.taskId)) continue;
+        if (r.submitComment) expect(r.submitPrivateTo).toContain('Rohan Kapoor');
+        if (r.verdictComment) expect(r.verdictPrivateTo).toContain('Rohan Kapoor');
+      }
+      for (const v of (await detail('rohan', id)).votes) {
+        if (phase2.has(v.taskId) && v.comment) expect(v.privateTo).toContain('Rohan Kapoor');
+      }
+    }
+    // The demo data has plenty of Phase 2 comments for this to mean something
+    expect(phase2Comments).toBeGreaterThan(5);
   });
 
   it('a private message can be shared with team members and this order’s Marketing and Creator only (D31)', async () => {

@@ -181,10 +181,7 @@ describe.skipIf(!TEST_DB_URL)('buyer chains, order numbers and documents to revi
       action: 'COMPLETE',
       products: ['Prod A'],
       orderRef: 'pi/acm/0042',
-      uploads: [
-        await upload('creator', 'PI_FULL', 'pi.pdf'),
-        await upload('creator', 'PI_NO_RATES', 'pi-nr.pdf'),
-      ],
+      uploads: [await upload('creator', 'PI_FULL', 'pi.pdf')],
     });
     expect(taken.statusCode).toBe(409);
     expect(taken.json().error).toBe('REF_TAKEN');
@@ -192,10 +189,7 @@ describe.skipIf(!TEST_DB_URL)('buyer chains, order numbers and documents to revi
       action: 'COMPLETE',
       products: ['Prod A'],
       orderRef: 'PI/ACM/0043',
-      uploads: [
-        await upload('creator', 'PI_FULL', 'pi.pdf'),
-        await upload('creator', 'PI_NO_RATES', 'pi-nr.pdf'),
-      ],
+      uploads: [await upload('creator', 'PI_FULL', 'pi.pdf')],
     });
     expect((await detail()).ref).toBe('PI/ACM/0043');
     const list = (await as.admin!.get('/v1/orders?q=acm/0043')).json();
@@ -209,7 +203,8 @@ describe.skipIf(!TEST_DB_URL)('buyer chains, order numbers and documents to revi
 
   it('approvers get the latest PI on the step and on My Work; a started stage is locked', async () => {
     const chain = await task('pi_approval', 'mkt');
-    expect(chain.reviewDocs.map((d) => d.kind)).toEqual(['PI_FULL', 'PI_NO_RATES']);
+    // Only the PI with rates goes for approval; the version without rates comes after (D32)
+    expect(chain.reviewDocs.map((d) => d.kind)).toEqual(['PI_FULL']);
     await ok('mkt', chain.id, { action: 'APPROVE' });
     // The Approver stage has started: it can't change any more; the Head stage still can
     const locked = await putSlot('mkt', 'PI_APPROVER', { employeeIds: [ids.appr1], gate: 'ANY' });
@@ -223,10 +218,7 @@ describe.skipIf(!TEST_DB_URL)('buyer chains, order numbers and documents to revi
     const work = (await as.appr2!.get('/v1/work')).json();
     expect(work.items).toHaveLength(1);
     expect(work.items[0]).toMatchObject({ orderRef: 'PI/ACM/0043' });
-    expect(work.items[0].documents.map((d: { kind: string }) => d.kind)).toEqual([
-      'PI_FULL',
-      'PI_NO_RATES',
-    ]);
+    expect(work.items[0].documents.map((d: { kind: string }) => d.kind)).toEqual(['PI_FULL']);
     // ALL of the three approvers this order now needs
     await ok('appr1', chain.id, { action: 'APPROVE' });
     await ok('appr2', chain.id, { action: 'APPROVE' });

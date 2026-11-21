@@ -16,7 +16,7 @@ import {
   type Team,
   type Template,
 } from '@docflow/shared';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { useId, useState } from 'react';
 import { toast } from 'sonner';
 import { ReviewDocList } from '@/components/DocumentButtons';
@@ -35,6 +35,7 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { api, errorMessage } from '@/lib/api';
+import { useRefreshOrder } from '@/lib/refresh';
 import { waitedFor } from '@/lib/labels';
 
 const today = () => {
@@ -122,7 +123,7 @@ export function TaskActionCard({
   const step = stepOf(template, task.stepKey);
   const actions = task.actions as TaskAction[];
   const id = useId();
-  const queryClient = useQueryClient();
+  const refresh = useRefreshOrder(order.id, ['order', 'timeline', 'work', 'orders', 'components']);
   const [comment, setComment] = useState('');
   const [date, setDate] = useState(today());
   const [uploads, setUploads] = useState<Record<string, UploadState>>({});
@@ -159,15 +160,7 @@ export function TaskActionCard({
     mutationFn: (body: TaskActionRequest) => api.tasks.act(task.id, body),
     onSuccess: (_data, body) => {
       toast.success(`${step.title}: ${actionLabel(step, body.action as TaskAction).toLowerCase()}`);
-      for (const key of [
-        ['order', order.id],
-        ['order-timeline', order.id],
-        ['work'],
-        ['orders'],
-        ['components', order.id],
-      ]) {
-        queryClient.invalidateQueries({ queryKey: key });
-      }
+      void refresh();
     },
   });
 

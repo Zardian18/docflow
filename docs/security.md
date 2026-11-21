@@ -25,6 +25,29 @@ No critical issue was found, and there was no way to reach another person's docu
 | 12 | Low | **Supply chain.** Images and actions were pinned by tag; 3 dev-only advisories. | Pinned by digest and SHA. Overrides for sharp and esbuild; braces ignored with its reason. `pnpm audit` runs in CI. | CI |
 | 13 | Info | **Housekeeping.** Expired sessions were never purged, and a trailing `/` in `WEB_ORIGIN` broke writes. | The tick purges sessions over 30 days old. `WEB_ORIGIN` is normalised. | `env.test.ts`, maintenance test |
 
+## Second review (21 Nov 2026, D33)
+A read-only review of the API, the web app, CI and dependencies, then fixes. Nothing Critical or High was found. Tests: `security.integration.test.ts` unless stated.
+
+| # | Severity | Finding | Fix | Test |
+|---|---|---|---|---|
+| F1 | Medium | **Phase 2 leaked through the order list.** Marketing alone saw Phase 2 step names in `current`, and could find orders by a Phase 2 `stepKey`. | The list hides steps of phases the person can't see, and filters by step only within them. | F1 test |
+| F2 | Low | **403 vs 404 told people which orders exist.** Cancelling or acting on an unseen order gave 403, and copied the attached file first. | 404, checked before any file is copied. | F2 test |
+| F3 | Medium | **Login lockout.** A guesser could lock anyone out by email. | `LoginGuard`: failures per email and address, per address, and a hard ceiling per email. | `auth.integration.test.ts` |
+| F4 | Low | **Last Admin race.** Two Admins demoting each other at once could leave none. | Admin changes take a transaction advisory lock. | F4 test |
+| F5 | Low | **Uploads.** Unlimited unsent uploads per person; files sent with an action that doesn't keep them were dropped silently. | At most 40 unsent uploads (400 MB) per person; unexpected files are refused (`DOC_NOT_EXPECTED`); cleanup also removes copied files of abandoned actions. | F5 tests, `maintenance.integration.test.ts` |
+| F6 | Low | **Database values in logs.** A failed query logged its parameters (emails, hashes). | Only the Postgres error code is logged. | `app.test.ts` |
+| F7 | Low | **Notices for orders out of sight.** | Shown only while the order and the message are open to the person. | F7 test |
+| F8 | Low | **Marketing could delete buyers.** | Admin only. | F8 test |
+| F10–F11 | Info | **Picker returned emails; answers could be cached.** | Names only; `Cache-Control: no-store` on API answers. | F10/F11 test |
+| F12 | Low | **Payment proof on any stage.** | Only on the stage that records the payment. | F12 test |
+| M1 | Medium | **Backup job secrets job-wide** while the restore drill runs npm code. | Each secret only on the step that uses it; the B2 sign-in is cleared before npm runs; the database URL never appears on a command line. | CI |
+| M2 | Medium | **Runtime advisories:** fastify, `ip-address`, `fast-uri`. | fastify 5.12.8 and overrides. CI also fails on any moderate advisory in production dependencies. | `pnpm audit --prod` |
+| L | Low | Local Postgres open on the network; images by tag; no COOP/CORP; HSTS without subdomains; open-redirect edge in `?next=`; unencoded ids in web API paths; migrations through the pooled URL in production. | `127.0.0.1` only; pinned by digest; COOP/CORP and `includeSubDomains`; same-origin check; `encodeURIComponent`; production requires `DATABASE_URL_DIRECT`. | Typecheck, build |
+
+**Speed:** My Work runs a fixed number of queries whatever the number of orders; order details, the timeline and component tables run their reads in parallel and reuse what's loaded; three indexes (migration 0015). The order and admin pages load on first visit, so the first download is smaller.
+
+**Cleanup:** unused components, helpers, shadcn files and packages (`@dnd-kit/*`, `pino`) removed, as well as stale `.env.example` names and audit exceptions; repeated code (task hand-over, closed-order checks, document kinds, component lookups, order refreshes in the web app) merged into one place each.
+
 ## Known limitations (accepted)
 - **Rate-limit counters are in memory:** they reset when the free Render instance sleeps or redeploys. That is fine for one instance. A shared store such as Redis is needed if the API ever scales out.
 - **Session cookie is `SameSite=None`:** the API and web app sit on different sites until the real domain exists. Strict privacy modes in Safari and Firefox may block it. Phase 8 moves both onto one site and switches to `Lax` (D11). Until then, CSRF is blocked by the Origin check and the JSON-only rule.

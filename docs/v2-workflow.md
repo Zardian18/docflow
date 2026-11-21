@@ -23,24 +23,26 @@ Ends when Accounts confirms the advance payment arrived. That starts production.
 flowchart TB
   A["Marketing creates the order<br/>buyer · its chain"] --> B{{"CBM loop<br/>Creator ⇄ Marketing"}}
   B -->|Marketing confirms| C["Buyer confirmed the CBM<br/>⏱ Tracker B starts"]
-  C --> D["Creator uploads the PI<br/>full version + version without rates"]
+  C --> D["Creator uploads the PI with rates"]
   D --> E["Marketing approves"]
   E --> F["Approver approves"]
   F --> G["Head Approver(s) approve<br/>ALL or ANY, per order"]
   E -.->|rejects with reason| D
   F -.->|rejects with reason| D
   G -.->|rejects with reason| D
-  G --> H["Marketing logs: PI sent,<br/>advance payment requested"]
+  G --> NR["Creator uploads the PI without rates<br/>(no approval needed)"]
+  NR --> H["Marketing logs: PI sent,<br/>advance payment requested"]
   H --> I["Accounts verifies the advance<br/>date · amount · reference · proof<br/>⏱ Tracker A starts"]
 ```
 
 1. **[Named] Marketing** creates the order in the app: the buyer (from the Buyer list; the buyer is the company), whose default chain fills in the Creator and approvers. Marketing can change the people and ALL/ANY for this order (D27). Talking to the buyer before this happens outside the app.
 2. **[Named] Creator ⇄ Marketing [Loop: CBM].** The Creator uploads the CBM (a file). Marketing confirms it or sends it back with a required comment, as many rounds as needed.
 3. **[Named] Marketing** presses **"Buyer confirmed CBM"**, with the date. This starts **Tracker B**, and the PI task opens for the Creator automatically.
-4. **[Named] Creator** uploads two files, the **full PI** and the **PI without rates, buyer name or address**, and lists the order's products. The app prompts them to change the order number (ORD-0007 at first) to the PI number (D27).
-5. **[Named] Marketing → Approver → Head Approver(s)** approve in that order. Each approval uses ALL or ANY, as set for the order. Any of them can reject with a reason: the PI goes back to the Creator, and after the fix the approvals start again from Marketing.
-6. **[Named] Marketing** logs that the PI was sent and the advance payment was requested.
-7. **[Team] Accounts** verifies the advance arrived (date, amount, reference, optional proof). **Phase 2 starts**, along with **Tracker A**.
+4. **[Named] Creator** uploads the **PI with rates** and lists the order's products. The app prompts them to change the order number (ORD-0007 at first) to the PI number (D27). The version without rates comes later (step 6, D32).
+5. **[Named] Marketing → Approver → Head Approver(s)** approve the PI with rates in that order. Each approval uses ALL or ANY, as set for the order. Any of them can reject with a reason: the PI goes back to the Creator, and after the fix the approvals start again from Marketing.
+6. **[Named] Creator**, once the PI is approved, uploads the **PI without rates, buyer name or address**. No approval is needed (D32).
+7. **[Named] Marketing** logs that the PI was sent and the advance payment was requested.
+8. **[Team] Accounts** verifies the advance arrived (date, amount, reference, optional proof). **Phase 2 starts**, along with **Tracker A**.
 
 ---
 

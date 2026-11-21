@@ -413,3 +413,20 @@ How to restore: `docs/runbook-backup.md`.
 - **"Shared with you"** on My Work is highlighted while it holds unread messages.
 - **More demo data:** 5 extra demo orders full of private messages, one each at the CBM, PI approval (with the Head), Phase 2 review loops, the payment check, and at sea. `seed:demo --add-private` adds them next to existing data (the live site) using each buyer's current chain. It checks the people and buyers it needs before writing anything.
 
+### D32 — PI without rates after approval; approvers tagged by default; Phase 2 messages and Marketing (owner, 21 Nov 2026)
+**Status: DECIDED.** New orders use workflow template **v4**. Orders already started keep the version they were created on.
+- **One PI goes for approval:** the Creator uploads only the **PI with rates** (with the products). Marketing, the Approver and the Head Approver(s) approve that one. A rejection still returns it to the Creator and restarts the chain.
+- **The PI without rates comes after approval:** once the chain approves, a new Creator step, **"PI without rates"**, asks for the version without rates, buyer name or address. It needs no approval: completing it opens "PI sent, advance requested".
+- **Who opens which PI doesn't change:** Regulation, Materials and Design only ever get the version without rates (`docAccess`, enforced by the API). Before it's uploaded they get no PI at all.
+- **Approvers are tagged by default:** every private message tags the order's approvers and Head Approvers, **in any slot**. That means everyone in an approver or Head Approver slot, and anyone holding Approver or Head Approver who sits in another slot on the order (for example Marketing). They show under "Shared with" and get the "Shared with you" notice. The payment-proof notice goes to the same people. The writer isn't tagged in their own message. Approvers and Head Approvers who aren't on the order still read everything (D30) but get no notice. Admin reads everything and gets no notice.
+- **Existing private messages** keep the audience they were written with: tagging applies to messages written from now on.
+- **Phase 2 messages and Marketing (unchanged, confirmed):** people whose only part is Marketing see no Phase 2 message, private or not, unless they are tagged in it. Someone who is Marketing **and** in Materials, Design, Regulation or Production keeps seeing Phase 2 (D29), and so does anyone holding Approver or Head Approver (D30). This now has its own test.
+
+### D33 — Security review fixes, cleanup and the new web address (owner, 21 Nov 2026)
+**Status: DECIDED.** The owner asked for a full review of vulnerabilities, speed and redundant code. Findings and fixes are listed in `docs/security.md` (second review). The owner's choices:
+- **Notices** for an order the person can no longer open (for example a team that joins in a later phase) aren't shown. They reappear if the order becomes visible.
+- **Deleting a buyer is for Admin only.** Marketing can still add and edit buyers.
+- **The share picker shows names only,** not emails.
+- **Login limits** count failed attempts per email from each address, so a guesser elsewhere can't lock the real person out. An email that fails 3× the per-email allowance from anywhere is refused everywhere for the window.
+- **Web address:** the Cloudflare workers.dev subdomain changes to `tridentlifeline`, so the app is at `https://docflow.tridentlifeline.workers.dev`. Render's `WEB_ORIGIN` changes at the same moment. No domain is bought.
+- **`main` is protected:** changes go through a pull request with CI passing.

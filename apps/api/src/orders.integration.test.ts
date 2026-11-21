@@ -186,22 +186,28 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
     expect((await detail()).trackerB).toMatchObject({ days: 0 });
   });
 
-  it('the PI needs both versions and the products; a rejection returns it to the Creator and restarts the chain', async () => {
+  it('the PI with rates goes for approval first; a rejection returns it to the Creator and restarts the chain (D32)', async () => {
     const pi = await task('pi');
     expect(pi.holder?.slot).toBe('CREATOR');
-    const missing = await act('creator', pi.id, {
+    const missing = await act('creator', pi.id, { action: 'COMPLETE', products: ['Prod A'] });
+    expect(missing.json().error).toBe('DOCUMENT_REQUIRED');
+    // The version without rates isn't asked for (or accepted) yet
+    const early = await act('creator', pi.id, {
       action: 'COMPLETE',
       products: ['Prod A'],
-      uploads: [await upload('creator', 'PI_FULL')],
+      uploads: [await upload('creator', 'PI_FULL'), await upload('creator', 'PI_NO_RATES')],
     });
-    expect(missing.json().error).toBe('DOCUMENT_REQUIRED');
+    expect(early.statusCode).toBe(400);
     await ok('creator', pi.id, {
       action: 'COMPLETE',
       products: ['Prod A', 'Prod B'],
-      uploads: [await upload('creator', 'PI_FULL'), await upload('creator', 'PI_NO_RATES')],
+      uploads: [await upload('creator', 'PI_FULL')],
     });
     let chain = await task('pi_approval');
     expect(chain).toMatchObject({ side: 'marketing', run: 1 });
+    expect(chain.reviewDocs.map((d) => d.kind)).toEqual(['PI_FULL']);
+    // The version without rates isn't asked for until the PI is approved
+    expect((await detail()).tasks.some((t) => t.stepKey === 'pi_no_rates')).toBe(false);
     await ok('mkt', chain.id, { action: 'APPROVE' });
     chain = await task('pi_approval');
     expect(chain.side).toBe('approver');
@@ -224,6 +230,32 @@ describe.skipIf(!TEST_DB_URL)('v2 order engine, end to end', () => {
     await ok('piAppr', chain.id, { action: 'APPROVE' });
     await ok('head1', chain.id, { action: 'APPROVE' });
     expect((await task('pi_approval')).status).toBe('DONE');
+  });
+
+  it('once the PI is approved, the Creator uploads the version without rates, with no approval of its own (D32)', async () => {
+    const noRates = await task('pi_no_rates');
+    expect(noRates).toMatchObject({ status: 'OPEN', holder: { slot: 'CREATOR' } });
+    expect((await detail('mkt')).tasks.find((t) => t.stepKey === 'pi_no_rates')!.actions).toEqual(
+      [],
+    );
+    expect((await detail()).tasks.some((t) => t.stepKey === 'advance_requested')).toBe(false);
+    expect((await act('creator', noRates.id, { action: 'COMPLETE' })).json().error).toBe(
+      'DOCUMENT_REQUIRED',
+    );
+    expect(
+      (
+        await act('creator', noRates.id, {
+          action: 'COMPLETE',
+          uploads: [await upload('creator', 'PI_FULL')],
+        })
+      ).statusCode,
+    ).toBe(400);
+    await ok('creator', noRates.id, {
+      action: 'COMPLETE',
+      uploads: [await upload('creator', 'PI_NO_RATES')],
+    });
+    expect((await task('pi_no_rates')).status).toBe('DONE');
+    expect((await task('advance_requested')).status).toBe('OPEN');
   });
 
   it('Accounts verifies the advance: production starts (Tracker A) with three tracks per product', async () => {
@@ -742,7 +774,7 @@ describe.skipIf(!TEST_DB_URL)('one person, several roles on one order', () => {
     await ok((await task('pi')).id, {
       action: 'COMPLETE',
       products: ['Prod A'],
-      uploads: [await upload('PI_FULL'), await upload('PI_NO_RATES')],
+      uploads: [await upload('PI_FULL')],
     });
 
     // The PI chain: one approval per stage, never one click for several

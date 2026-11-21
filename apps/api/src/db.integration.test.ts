@@ -36,6 +36,7 @@ describe.skipIf(!url)('database integration', () => {
     const res = await app.inject({ method: 'GET', url: '/v1/ping' });
     await app.close();
     expect(res.statusCode).toBe(200);
-    expect(PingResponse.parse(res.json()).employeeCount).toBeGreaterThanOrEqual(0);
+    // Reachability only: nothing about the data, not even how many people there are (F9)
+    expect(PingResponse.strict().parse(res.json())).toMatchObject({ message: 'pong' });
   });
 });

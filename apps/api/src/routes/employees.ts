@@ -61,7 +61,11 @@ async function setMemberships(tx: Tx, id: string, teams: Team[], capabilities: C
   }
 }
 
+/** Serialises changes that remove an Admin, so two at once can't leave none (F4) */
+const ADMIN_CHANGE_LOCK = 7_302_411;
+
 async function otherActiveAdmins(tx: Tx, employeeId: string) {
+  await tx.execute(sql`select pg_advisory_xact_lock(${ADMIN_CHANGE_LOCK})`);
   const [row] = await tx
     .select({ n: count() })
     .from(employees)

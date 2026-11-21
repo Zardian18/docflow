@@ -5,8 +5,10 @@ import type { Env } from '../env.js';
 export interface Limits {
   /** Login / set-password / forgot-password attempts per IP(+email) per minute. */
   authAttemptsPerMinute: number;
-  /** Login attempts per email per 15 minutes, from any number of IPs. */
+  /** Failed logins per email per 15 minutes before only fresh addresses may try (LoginGuard). */
   loginAttemptsPerEmail: number;
+  /** Failed logins per address per 15 minutes, across all emails. */
+  loginFailuresPerIp: number;
   /** Change-password attempts per signed-in user per minute. */
   passwordChangesPerMinute: number;
   /** Uploads, submissions and decisions per signed-in user per minute. */
@@ -16,6 +18,7 @@ export interface Limits {
 export const DEFAULT_LIMITS: Limits = {
   authAttemptsPerMinute: 5,
   loginAttemptsPerEmail: 20,
+  loginFailuresPerIp: 50,
   passwordChangesPerMinute: 5,
   userActionsPerMinute: 30,
 };

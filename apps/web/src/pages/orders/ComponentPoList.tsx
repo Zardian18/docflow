@@ -1,10 +1,11 @@
 import { TAG_LABEL, type Component, type Tag } from '@docflow/shared';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { CheckCircle2 } from 'lucide-react';
 import { useState } from 'react';
 import { DocumentButtons } from '@/components/DocumentButtons';
 import { FileDropzone, type UploadState } from '@/components/FileDropzone';
 import { api, errorMessage } from '@/lib/api';
+import { useRefreshOrder } from '@/lib/refresh';
 
 /**
  * Purchase orders, one per component (D29, D30). Materials attaches each while the tables are
@@ -24,7 +25,7 @@ export function ComponentPoList({
   /** Only components of this type (an ordering step) */
   kind?: Tag;
 }) {
-  const queryClient = useQueryClient();
+  const refresh = useRefreshOrder(orderId, ['components', 'order']);
   const tables = useQuery({
     queryKey: ['components', orderId],
     queryFn: ({ signal }) => api.orders.components(orderId, signal),
@@ -41,8 +42,7 @@ export function ComponentPoList({
     try {
       await api.components.uploadPo(componentId, state.uploadId);
       setUploads((u) => ({ ...u, [componentId]: { kind: 'empty' } }));
-      await queryClient.invalidateQueries({ queryKey: ['components', orderId] });
-      await queryClient.invalidateQueries({ queryKey: ['order', orderId] });
+      await refresh();
     } catch (err) {
       setUploads((u) => ({
         ...u,

@@ -365,6 +365,7 @@ export const holderIntervals = pgTable(
   },
   (t) => [
     index('holder_intervals_task_idx').on(t.taskId, t.startedAt),
+    index('holder_intervals_order_idx').on(t.orderId),
     uniqueIndex('holder_intervals_one_open')
       .on(t.taskId)
       .where(sql`${t.endedAt} is null`),
@@ -424,6 +425,8 @@ export const notices = pgTable(
     title: text('title').notNull(),
     actorId: uuid('actor_id').references(() => employees.id),
     comment: text('comment'),
+    /** The private message it is about, re-checked when shown (F7) */
+    audienceId: uuid('audience_id').references(() => audiences.id),
     createdAt: createdAt(),
     readAt: timestamp('read_at', { withTimezone: true }),
   },
@@ -575,7 +578,10 @@ export const orderComponents = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => [index('order_components_product_idx').on(t.productId, t.srNo)],
+  (t) => [
+    index('order_components_product_idx').on(t.productId, t.srNo),
+    index('order_components_order_idx').on(t.orderId, t.srNo),
+  ],
 );
 
 /** Every edit to a component row: who, when, what changed (Q39) */
@@ -597,7 +603,10 @@ export const componentChanges = pgTable(
     comment: text('comment'),
     createdAt: happenedAt('created_at'),
   },
-  (t) => [index('component_changes_component_idx').on(t.componentId, t.createdAt)],
+  (t) => [
+    index('component_changes_component_idx').on(t.componentId, t.createdAt),
+    index('component_changes_order_idx').on(t.orderId),
+  ],
 );
 
 export const shipmentCheckpoints = pgTable(

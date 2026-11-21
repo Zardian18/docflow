@@ -1,4 +1,4 @@
-import { TEAM_LABEL, TEAMS, type PersonOption, type Team } from '@docflow/shared';
+import { TEAM_LABEL, TEAMS, type ShareCandidate, type Team } from '@docflow/shared';
 import { Lock, X } from 'lucide-react';
 import { useId } from 'react';
 import { AsyncCombobox } from '@/components/AsyncCombobox';
@@ -6,14 +6,14 @@ import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 
 export interface PrivateValue {
-  people: PersonOption[];
+  people: ShareCandidate[];
   teams: Team[];
 }
 
 /**
  * "Make this private" (D29): when on, only the people and teams picked here see this action and
- * its comment, plus, always, the order's approvers and Head Approvers, whoever the step goes to,
- * the writer and Admin. Tagged people get a notice on My Work.
+ * its comment, plus whoever the step goes to, the writer and Admin. The order's approvers and
+ * Head Approvers, in any slot, are always tagged (D32). Tagged people get a notice on My Work.
  */
 export function PrivatePicker({
   orderId,
@@ -40,9 +40,9 @@ export function PrivatePicker({
       {value && (
         <>
           <p className="text-muted-foreground text-xs">
-            Only the people and teams you add here will see this, plus the order’s approvers and
-            Head Approvers (always), whoever the step goes to, and Admin. Everyone you add gets a
-            notice on My Work.
+            Only the people and teams you add here will see this, plus whoever the step goes to and
+            Admin. The order’s approvers and Head Approvers are always tagged. Everyone tagged gets
+            a notice on My Work.
           </p>
           <AsyncCombobox
             label="Share with a person"
@@ -55,14 +55,13 @@ export function PrivatePicker({
               (await api.orders.shareCandidates(orderId, q, signal)).map((p) => ({
                 id: p.id,
                 label: p.name,
-                hint: p.email,
               }))
             }
             onChange={(o) => {
               if (!o || value.people.some((p) => p.id === o.id)) return;
               onChange({
                 ...value,
-                people: [...value.people, { id: o.id, name: o.label, email: o.hint ?? '' }],
+                people: [...value.people, { id: o.id, name: o.label }],
               });
             }}
           />

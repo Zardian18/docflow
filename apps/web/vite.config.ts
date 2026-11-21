@@ -30,7 +30,10 @@ function securityHeaders(apiBaseUrl: string, storageOrigin: string): Record<stri
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'strict-origin-when-cross-origin',
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
-    'Strict-Transport-Security': 'max-age=31536000',
+    'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+    // No other site's window keeps a handle on ours, nor loads our files into its pages
+    'Cross-Origin-Opener-Policy': 'same-origin',
+    'Cross-Origin-Resource-Policy': 'same-origin',
   };
 }
 
@@ -51,6 +54,10 @@ export default defineConfig(({ command, mode }) => {
   const apiBaseUrl = env.VITE_API_BASE_URL;
   if (command === 'build' && !apiBaseUrl) {
     throw new Error('VITE_API_BASE_URL must be set for a production build');
+  }
+  // NODE_ENV=development (e.g. exported from the root .env) bundles React's development build
+  if (command === 'build' && process.env.NODE_ENV === 'development') {
+    throw new Error('Unset NODE_ENV=development before a production build');
   }
   const headers = apiBaseUrl
     ? securityHeaders(apiBaseUrl, env.STORAGE_ORIGIN || DEFAULT_STORAGE_ORIGIN)

@@ -5,13 +5,14 @@ packages:
 allowBuilds:
   esbuild: true
   workerd: true
-minimumReleaseAgeExclude:
-  - pino-pretty@13.2.0
-  - '@aws-sdk/client-s3@3.1147.0'
-  - '@aws-sdk/s3-request-presigner@3.1147.0'
-
-# Dev-only advisories (Phase 7 finding 12); nothing here ships in the API image or the SPA.
 overrides:
+  # Runtime advisories in the API's dependencies (security review M2, D33):
+  # GHSA-rxp7-6hxx-x8q5 (IPv6 zone-id DoS) via @fastify/rate-limit
+  'ip-address': 10.7.6
+  # Scheme/host confusion advisories via ajv and fast-json-stringify; same majors, drop-in
+  'fast-uri@3': 3.1.9
+  'fast-uri@4': 4.2.3
+  # Dev-only advisories below (Phase 7 finding 12); nothing here ships in the API image or the SPA.
   # GHSA-wq5f-xc86-pv6w: wrangler's local simulator pins 0.35.4; the patch release is drop-in
   'miniflare>sharp': 0.35.5
   # GHSA-67mh-4wv8-2f99 (dev-server CORS): drizzle-kit's TS config loader pins esbuild 0.18;
@@ -23,9 +24,3 @@ overrides:
   # undici DoS / redirect / TLS advisories (patched 7.30.1): wrangler's local simulator only,
   # same minor line
   'miniflare>undici': 7.30.1
-
-auditConfig:
-  ignoreGhsas:
-    # braces ReDoS-style stack exhaustion; no patched release exists. Reached only through the
-    # shadcn CLI's file globbing (dev machines, our own patterns); the app imports only its CSS.
-    - GHSA-vfj7-8cjw-p6xm
