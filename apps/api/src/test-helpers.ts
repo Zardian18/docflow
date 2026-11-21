@@ -10,6 +10,7 @@ export function testEnv(overrides: Partial<Env> = {}): Env {
     DATABASE_URL: 'postgres://unused:unused@localhost:5432/unused',
     DATABASE_URL_DIRECT: undefined,
     WEB_ORIGIN: 'http://localhost:5173',
+    WEB_ORIGINS_EXTRA: [],
     TRUSTED_PROXY_HOPS: 3,
     STORAGE_DRIVER: 'b2',
     SESSION_COOKIE_SAMESITE: 'none',

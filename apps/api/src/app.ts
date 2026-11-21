@@ -196,9 +196,10 @@ export async function buildApp({
     });
   });
 
+  const webOrigins = [env.WEB_ORIGIN, ...env.WEB_ORIGINS_EXTRA];
   await app.register(helmet);
   await app.register(cors, {
-    origin: env.WEB_ORIGIN,
+    origin: webOrigins,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
   });
@@ -206,7 +207,7 @@ export async function buildApp({
   // Per-route limits only (auth endpoints); runs after body parsing so keys can use the email
   await app.register(rateLimit, { global: false, hook: 'preHandler' });
   await app.register(csrfPlugin, {
-    webOrigin: env.WEB_ORIGIN,
+    webOrigins,
     // Local-storage URLs are authorised by their signature, like B2's presigned URLs
     exemptPaths: local ? [TICK_PATH, LOCAL_STORAGE_PATH] : [TICK_PATH],
   });

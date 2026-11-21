@@ -117,7 +117,7 @@ So "as many as possible for free" resolves to **file storage as the real ceiling
 **Status: ANSWERED (owner set up the accounts; reconciled against current provider docs).** Where this differs from earlier plan text, this entry wins.
 
 - **Email provider: Brevo** (not Resend). `EMAIL_PROVIDER=brevo` is the default.
-- **Frontend: Cloudflare Workers static assets, not Cloudflare Pages.** An assets-only Worker named `docflow`, with no Worker script. It is deployed by Workers Builds (Cloudflare's git integration) with root directory `apps/web`, build command `pnpm install && pnpm build`, and deploy command `npx wrangler deploy`. Config lives in `apps/web/wrangler.jsonc`, and its `name` must match the dashboard Worker name or the build fails. URL: `docflow.<subdomain>.workers.dev`.
+- **Frontend (until D34, which moved it to Cloudflare Pages): Cloudflare Workers static assets.** An assets-only Worker named `docflow`, with no Worker script. It is deployed by Workers Builds (Cloudflare's git integration) with root directory `apps/web`, build command `pnpm install && pnpm build`, and deploy command `npx wrangler deploy`. Config lives in `apps/web/wrangler.jsonc`, and its `name` must match the dashboard Worker name or the build fails. URL: `docflow.<subdomain>.workers.dev`.
   - `VITE_API_BASE_URL` must be a **build** variable (Settings → Build), because runtime variables aren't visible to `vite build`.
   - The build image defaults to pnpm 10, so the build variable `PNPM_VERSION=12.9.1` is required.
 - **Cron worker:** a second Workers Builds project, `docflow-cron`, with root directory `infra/cron-worker`. It runs every **30** minutes (changed from 20 on 6 Oct 2026: measured on 6 Oct, a 20-minute tick kept Render awake permanently, because Render did not sleep after 18 min idle; that made the tick a de-facto keep-alive using ~744 of the 750 free hours a month), and `workers_dev` is off (cron only, no public URL). Its secret `TICK_SECRET` has the same value as the API's `TICK_SHARED_SECRET`.
@@ -129,7 +129,7 @@ So "as many as possible for free" resolves to **file storage as the real ceiling
   - Health check: `/healthz`
 - **Migrations run on container start** (`node dist/migrate.js && node dist/server.js`) over `DATABASE_URL_DIRECT`, guarded by a Postgres advisory lock. The free tier has no Pre-Deploy Command.
 - **No GitHub deploy workflows.** Both hosts deploy from their own git integrations on push to `main`, and GitHub Actions runs CI only (`.github/workflows/ci.yml`). Nightly backup (`backup.yml`) was added in Phase 7; see below.
-- **Live URLs (5 Oct 2026):** web `https://docflow.harddik2002.workers.dev`, API `https://docflow-xayj.onrender.com`. Render suffixes subdomains that are already taken: `docflow.onrender.com` belongs to another account, so always copy the URL from the dashboard. Changing a Cloudflare build variable does not trigger a rebuild; push a commit or use "Retry build".
+- **Live URLs (5 Oct 2026; web moved by D34 to `https://tridentlifeline.pages.dev`):** web `https://docflow.harddik2002.workers.dev`, API `https://docflow-xayj.onrender.com`. Render suffixes subdomains that are already taken: `docflow.onrender.com` belongs to another account, so always copy the URL from the dashboard. Changing a Cloudflare build variable does not trigger a rebuild; push a commit or use "Retry build".
 - **One environment, no staging yet.** plan.md §6 assumed staging plus a production approval gate. Add a separate Neon branch and Render service for staging before real data goes in (Phase 7/8).
 - **Neon:** Singapore region (Render and Cloudflare regions are the owner's choice). The pooled string serves runtime queries and the direct string serves migrations.
 - **Backblaze B2** endpoint `s3.eu-central-003.backblazeb2.com` (region `eu-central-003`), private bucket with a scoped key. Not used by code until Phase 3.
@@ -428,5 +428,13 @@ How to restore: `docs/runbook-backup.md`.
 - **Deleting a buyer is for Admin only.** Marketing can still add and edit buyers.
 - **The share picker shows names only,** not emails.
 - **Login limits** count failed attempts per email from each address, so a guesser elsewhere can't lock the real person out. An email that fails 3× the per-email allowance from anywhere is refused everywhere for the window.
-- **Web address:** the Cloudflare workers.dev subdomain changes to `tridentlifeline`, so the app is at `https://docflow.tridentlifeline.workers.dev`. Render's `WEB_ORIGIN` changes at the same moment. No domain is bought.
+- **Web address:** the Cloudflare workers.dev subdomain was to change to `tridentlifeline`. Superseded by D34: Cloudflare refused the change.
 - **`main` is protected:** changes go through a pull request with CI passing.
+
+### D34 — The web app moves to Cloudflare Pages at tridentlifeline.pages.dev (owner, 21 Nov 2026)
+**Status: DECIDED.** Replaces D33's address change and the frontend part of D15.
+- **Why:** the owner wanted the address without `harddik2002`, without buying a domain. Cloudflare refused to change the account's workers.dev subdomain (error 10036, "Account already has an associated subdomain"; only support can change it). A Pages address carries no account name.
+- **Where:** Cloudflare Pages project `tridentlifeline`, connected to this repo, building `main` on push (production only; no preview builds). Repo root as the root directory; build command `pnpm install --frozen-lockfile && pnpm --filter @docflow/web build`; output `apps/web/dist`. Build variables: `NODE_VERSION=24`, `PNPM_VERSION=12.9.1`, `SKIP_DEPENDENCY_INSTALL=1`, `VITE_API_BASE_URL`. Builds only run when `apps/web`, `packages/shared` or the root manifests change. `dist/_headers` applies as before, and Pages serves `index.html` for app routes.
+- **Moving without locking anyone out:** the API accepts a second web address while people move (`WEB_ORIGINS_EXTRA`, comma-separated). Render gets `WEB_ORIGIN=https://tridentlifeline.pages.dev` and `WEB_ORIGINS_EXTRA=https://docflow.harddik2002.workers.dev`. Set-password links always use `WEB_ORIGIN`. The Backblaze bucket CORS allows both addresses.
+- **The old address** (the `docflow` Worker) keeps serving until the owner retires it or turns it into a redirect.
+

@@ -48,6 +48,17 @@ describe('loadEnv', () => {
     );
   });
 
+  it('reads extra web addresses as a list of bare origins (D34)', () => {
+    expect(loadEnv(valid).WEB_ORIGINS_EXTRA).toEqual([]);
+    expect(
+      loadEnv({ ...valid, WEB_ORIGINS_EXTRA: ' https://old.example/ , https://b.example/x ' })
+        .WEB_ORIGINS_EXTRA,
+    ).toEqual(['https://old.example', 'https://b.example']);
+    expect(() => loadEnv({ ...valid, WEB_ORIGINS_EXTRA: 'not a url' })).toThrow(
+      /WEB_ORIGINS_EXTRA/,
+    );
+  });
+
   it('trusts the measured Render proxy hops by default', () => {
     expect(loadEnv(valid).TRUSTED_PROXY_HOPS).toBe(3);
     expect(loadEnv({ ...valid, TRUSTED_PROXY_HOPS: '0' }).TRUSTED_PROXY_HOPS).toBe(0);

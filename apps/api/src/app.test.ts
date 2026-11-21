@@ -120,3 +120,35 @@ describe('safeError (F6)', () => {
     });
   });
 });
+
+describe('a second web address (D34)', () => {
+  const OLD = 'https://old.example.workers.dev';
+  let two: Awaited<ReturnType<typeof buildApp>>;
+  beforeAll(async () => {
+    two = await buildApp({ env: { ...env, WEB_ORIGINS_EXTRA: [OLD] }, db });
+    await two.ready();
+  });
+  afterAll(() => two.close());
+
+  it('allows both addresses and nothing else', async () => {
+    for (const origin of [env.WEB_ORIGIN, OLD]) {
+      const res = await two.inject({ method: 'GET', url: '/healthz', headers: { origin } });
+      expect(res.headers['access-control-allow-origin']).toBe(origin);
+      // Past the origin check: malformed JSON gets 400, not 403
+      const post = await two.inject({
+        method: 'POST',
+        url: '/v1/auth/login',
+        headers: { origin, 'content-type': 'application/json' },
+        payload: '{',
+      });
+      expect(post.statusCode).toBe(400);
+    }
+    const evil = await two.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      headers: { origin: 'https://evil.example', 'content-type': 'application/json' },
+      payload: '{}',
+    });
+    expect(evil.statusCode).toBe(403);
+  });
+});
