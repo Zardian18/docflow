@@ -9,13 +9,14 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
  * from the web origin and be JSON (which forces a CORS preflight for cross-origin callers).
  * Routes that authenticate by other means (the cron tick's shared secret) opt out.
  */
-export const csrfPlugin = fp<{ webOrigin: string; exemptPaths: string[] }>(
-  async (app, { webOrigin, exemptPaths }) => {
+export const csrfPlugin = fp<{ webOrigins: string[]; exemptPaths: string[] }>(
+  async (app, { webOrigins, exemptPaths }) => {
     const exempt = new Set(exemptPaths);
+    const allowed = new Set(webOrigins);
     app.addHook('onRequest', async (request) => {
       if (SAFE_METHODS.has(request.method)) return;
       if (exempt.has(request.routeOptions.url ?? '')) return;
-      if (request.headers.origin !== webOrigin) {
+      if (!allowed.has(request.headers.origin ?? '')) {
         throw forbidden('Request origin not allowed');
       }
       const contentType = request.headers['content-type'] ?? '';

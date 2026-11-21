@@ -24,6 +24,19 @@ const EnvSchema = z
     // Exact origin of the web app, for CORS with credentials. Normalised to scheme://host[:port]
     // so a trailing slash or path in the dashboard value can't break the Origin check.
     WEB_ORIGIN: z.url().transform((v) => new URL(v).origin),
+    // Other web addresses also allowed to call the API, comma-separated: an old address kept
+    // working while the app moves to a new one (D34). Links in set-password emails always use
+    // WEB_ORIGIN.
+    WEB_ORIGINS_EXTRA: z
+      .string()
+      .default('')
+      .transform((v) =>
+        v
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
+      )
+      .pipe(z.array(z.url().transform((v) => new URL(v).origin))),
 
     // Proxies between the client and this process, counted from the socket. Measured on Render
     // (2026-10-06): Render's router, its internal hop and Cloudflare's edge = 3. request.ip is
