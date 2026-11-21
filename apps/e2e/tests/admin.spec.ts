@@ -53,7 +53,9 @@ test('Admin: a person in several teams, a buyer with its default chain and ALL/A
     .getByRole('link', { name: 'Edit Lagos Pharmacy Ltd' })
     .filter({ visible: true })
     .click();
-  await expect(rohan.page.getByText('Only Admin changes the default chain.')).toBeVisible();
+  await expect(
+    rohan.page.getByText('Only Admin changes the default chain and deletes buyers.'),
+  ).toBeVisible();
   await expect(rohan.page.getByRole('combobox', { name: /^Marketing:/ })).toHaveCount(0);
   await rohan.context.close();
 });

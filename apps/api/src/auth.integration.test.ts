@@ -290,11 +290,45 @@ describe.skipIf(!TEST_DB_URL)('auth', () => {
     await limited.close();
   });
 
-  it('limits guesses at one account from many IPs', async () => {
+  it('limits guesses at one account from many IPs, without locking out its owner', async () => {
     const limited = await buildApp({
       env: testEnv({ DATABASE_URL: TEST_DB_URL ?? '' }),
       db,
       limits: { authAttemptsPerMinute: 100, loginAttemptsPerEmail: 3 },
+    });
+    const login = async (ip: string, password = 'wrong-wrong-wrong') =>
+      (
+        await limited.inject({
+          method: 'POST',
+          url: '/v1/auth/login',
+          headers: {
+            origin: testEnv().WEB_ORIGIN,
+            'content-type': 'application/json',
+            'x-forwarded-for': `${ip}, 172.69.178.211, 10.25.16.5`,
+          },
+          payload: JSON.stringify({ email: 'Admin@docflow.test', password }),
+        })
+      ).statusCode;
+    // Three failures from three addresses reach the account's allowance
+    const statuses = [];
+    for (let i = 0; i < 3; i++) statuses.push(await login(`198.51.100.${i}`));
+    expect(statuses).toEqual([401, 401, 401]);
+    // The addresses that failed are refused, even with the right password
+    expect(await login('198.51.100.0', TEST_PASSWORD)).toBe(429);
+    // The owner, from a network that hasn't failed, still signs in (no lockout by strangers)
+    expect(await login('203.0.113.7', TEST_PASSWORD)).toBe(200);
+    // A successful sign-in doesn't use up the allowance; more guesses from new addresses do,
+    // and at three times the allowance the account is refused everywhere
+    for (let i = 3; i < 9; i++) expect(await login(`198.51.100.${i}`)).toBe(401);
+    expect(await login('203.0.113.8', TEST_PASSWORD)).toBe(429);
+    await limited.close();
+  });
+
+  it('caps failed logins from one address across all accounts', async () => {
+    const limited = await buildApp({
+      env: testEnv({ DATABASE_URL: TEST_DB_URL ?? '' }),
+      db,
+      limits: { authAttemptsPerMinute: 100, loginFailuresPerIp: 3 },
     });
     const statuses = [];
     for (let i = 0; i < 4; i++) {
@@ -304,9 +338,12 @@ describe.skipIf(!TEST_DB_URL)('auth', () => {
         headers: {
           origin: testEnv().WEB_ORIGIN,
           'content-type': 'application/json',
-          'x-forwarded-for': `198.51.100.${i}, 172.69.178.211, 10.25.16.5`,
+          'x-forwarded-for': '198.51.100.50, 172.69.178.211, 10.25.16.5',
         },
-        payload: JSON.stringify({ email: 'Admin@docflow.test', password: 'wrong-wrong-wrong' }),
+        payload: JSON.stringify({
+          email: `nobody${i}@docflow.test`,
+          password: 'wrong-wrong-wrong',
+        }),
       });
       statuses.push(res.statusCode);
     }

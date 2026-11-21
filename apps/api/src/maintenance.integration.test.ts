@@ -91,6 +91,22 @@ describe.skipIf(!TEST_DB_URL)('cron tick housekeeping (Phase 7 findings 5 and 13
     expect((await tick()).json()).toMatchObject({ uploadsRemoved: 1 });
   });
 
+  it('deletes an attached upload’s object again once its upload URL has expired (F5)', async () => {
+    const old = await presign();
+    const recent = await presign();
+    // Both attached; the browser wrote to the old key again after attaching
+    await db.execute(sql`update uploads set consumed_at = now()`);
+    await db.execute(
+      sql`update uploads set created_at = now() - interval '11 minutes' where id = ${old.uploadId}`,
+    );
+    expect((await tick()).json()).toMatchObject({ uploadsRemoved: 1 });
+    expect(storage.objects.has(old.key)).toBe(false);
+    // Its URL may still be used, so it waits for the next tick
+    expect(storage.objects.has(recent.key)).toBe(true);
+    const left = (await db.execute(sql`select id from uploads`)).rows as { id: string }[];
+    expect(left.map((r) => r.id)).toEqual([recent.uploadId]);
+  });
+
   it('purges sessions that expired or were revoked over 30 days ago, and no others', async () => {
     const other = await new Client(app).login('creator@t.co');
     await db.execute(

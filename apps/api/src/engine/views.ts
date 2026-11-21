@@ -31,7 +31,6 @@ import {
   holderIntervals,
   orderComponents,
   orderEvents,
-  orderProducts,
   payments,
   shipmentCheckpoints,
 } from '../db/schema.js';
@@ -49,11 +48,13 @@ import {
 import { dayCount, heldClock, localDay, sinceClock } from './clock.js';
 import {
   actionsFor,
+  canCancel,
   canEditChain,
   canRename,
   editableSlots,
   holderLabel,
   loadCtx,
+  stepDocKinds,
   type OrderCtx,
 } from './engine.js';
 
@@ -83,18 +84,31 @@ type DocRow = typeof documents.$inferSelect;
  * a phase hidden from Marketing alone, and documents by kind.
  */
 export async function privacyFor(db: Db, user: AuthUser, ctx: OrderCtx) {
-  const rows = await db
-    .select({
-      audienceId: audienceMembers.audienceId,
-      employeeId: audienceMembers.employeeId,
-      employeeName: employees.name,
-      team: audienceMembers.team,
-      tagged: audienceMembers.tagged,
-    })
-    .from(audienceMembers)
-    .innerJoin(audiences, eq(audiences.id, audienceMembers.audienceId))
-    .leftJoin(employees, eq(employees.id, audienceMembers.employeeId))
-    .where(eq(audiences.orderId, ctx.order.id));
+  return (await privacyForMany(db, user, [ctx])).get(ctx.order.id)!;
+}
+
+/** The same for several orders, in one query */
+export async function privacyForMany(db: Db, user: AuthUser, ctxs: OrderCtx[]) {
+  const rows = ctxs.length
+    ? await db
+        .select({
+          orderId: audiences.orderId,
+          audienceId: audienceMembers.audienceId,
+          employeeId: audienceMembers.employeeId,
+          employeeName: employees.name,
+          team: audienceMembers.team,
+          tagged: audienceMembers.tagged,
+        })
+        .from(audienceMembers)
+        .innerJoin(audiences, eq(audiences.id, audienceMembers.audienceId))
+        .leftJoin(employees, eq(employees.id, audienceMembers.employeeId))
+        .where(
+          inArray(
+            audiences.orderId,
+            ctxs.map((c) => c.order.id),
+          ),
+        )
+    : [];
   const members = new Map<string, AudienceMembers & { labels: string[] }>();
   for (const r of rows) {
     const m = members.get(r.audienceId) ?? { employeeIds: [], teams: [], labels: [] };
@@ -103,6 +117,14 @@ export async function privacyFor(db: Db, user: AuthUser, ctx: OrderCtx) {
     if (r.tagged) m.labels.push(r.team ? TEAM_LABEL[r.team as Team] : (r.employeeName ?? '—'));
     members.set(r.audienceId, m);
   }
+  return new Map(ctxs.map((ctx) => [ctx.order.id, privacyOf(user, ctx, members)]));
+}
+
+function privacyOf(
+  user: AuthUser,
+  ctx: OrderCtx,
+  members: Map<string, AudienceMembers & { labels: string[] }>,
+) {
   const sees = (audienceId: string | null) =>
     !audienceId || canSeeAudience(user, ctx, members.get(audienceId));
   /** In a private message's audience by name or team: shown even in a phase hidden from them */
@@ -113,13 +135,9 @@ export async function privacyFor(db: Db, user: AuthUser, ctx: OrderCtx) {
   /** Who a private message is shared with, as labels; null when not private */
   const sharedWith = (audienceId: string | null) =>
     audienceId ? (members.get(audienceId)?.labels ?? []) : null;
-  const phaseOfTask = (taskId: string | null) => {
-    const task = ctx.tasks.find((t) => t.id === taskId);
-    return task ? stepOf(ctx.template, task.stepKey).phase : null;
-  };
   const seesTask = (taskId: string | null) => {
-    const phase = phaseOfTask(taskId);
-    return phase === null || seesPhase(user, ctx, phase);
+    const task = ctx.tasks.find((t) => t.id === taskId);
+    return !task || seesPhase(user, ctx, stepOf(ctx.template, task.stepKey).phase);
   };
   const privatePhase = ctx.template.phasePrivacy?.phase;
   const hiddenPhases =
@@ -137,19 +155,9 @@ export async function privacyFor(db: Db, user: AuthUser, ctx: OrderCtx) {
 
 /** The document kinds a step is about: what it attaches, and what its approval chain approves */
 function reviewKinds(step: StepDef): DocKind[] {
-  switch (step.kind) {
-    case 'TASK':
-      return (step.docs ?? []).map((d) => d.kind);
-    case 'REVIEW_LOOP':
-      return step.doc ? [step.doc] : [];
-    case 'APPROVAL_CHAIN':
-      return [
-        ...(step.docToApprove ?? []),
-        ...(step.stages.some((s) => s.form === 'PAYMENT') ? (['PAYMENT_PROOF'] as const) : []),
-      ].filter((k, i, all) => all.indexOf(k) === i);
-    default:
-      return [];
-  }
+  return step.kind === 'APPROVAL_CHAIN'
+    ? [...new Set([...(step.docToApprove ?? []), ...stepDocKinds(step)])]
+    : stepDocKinds(step);
 }
 
 /**
@@ -186,15 +194,15 @@ export async function taskViews(
   user: AuthUser,
   ctx: OrderCtx,
   docs: DocRow[],
+  votes: Array<typeof approvalVotes.$inferSelect>,
 ): Promise<TaskView[]> {
-  const intervals = await db
-    .select()
-    .from(holderIntervals)
-    .where(eq(holderIntervals.orderId, ctx.order.id))
-    .orderBy(asc(holderIntervals.startedAt));
-  const names = await namesOf(db, [
-    ...ctx.tasks.map((t) => t.doneBy),
-    ...[...ctx.slots.values()].flat(),
+  const [intervals, names] = await Promise.all([
+    db
+      .select()
+      .from(holderIntervals)
+      .where(eq(holderIntervals.orderId, ctx.order.id))
+      .orderBy(asc(holderIntervals.startedAt)),
+    namesOf(db, [...ctx.tasks.map((t) => t.doneBy), ...[...ctx.slots.values()].flat()]),
   ]);
   const order = new Map(ctx.template.steps.map((s, i) => [s.key, i]));
   const sorted = [...ctx.tasks].sort(
@@ -240,7 +248,7 @@ export async function taskViews(
       doneAt: iso(t.doneAt),
       doneByName: t.doneBy ? (names.get(t.doneBy) ?? null) : null,
       held: holder ? heldClock(sameHolder) : null,
-      actions: await actionsFor(db, user, ctx, t),
+      actions: await actionsFor(db, user, ctx, t, votes),
       reviewDocs: reviewDocsFor(user, ctx, t, docs),
     });
   }
@@ -250,7 +258,7 @@ export async function taskViews(
 export async function orderDetail(db: Db, user: AuthUser, orderId: string): Promise<OrderDetail> {
   const ctx = await visibleCtx(db, user, orderId);
   const o = ctx.order;
-  const [[buyer], docs, rounds, votes, pays, checkpoints] = await Promise.all([
+  const [[buyer], docs, rounds, votes, pays, checkpoints, privacy] = await Promise.all([
     db.select({ name: buyers.name }).from(buyers).where(eq(buyers.id, o.buyerId)),
     db
       .select()
@@ -278,6 +286,7 @@ export async function orderDetail(db: Db, user: AuthUser, orderId: string): Prom
       .from(shipmentCheckpoints)
       .where(eq(shipmentCheckpoints.orderId, o.id))
       .orderBy(asc(shipmentCheckpoints.loggedAt)),
+    privacyFor(db, user, ctx),
   ]);
   const names = await namesOf(db, [
     o.createdBy,
@@ -289,9 +298,8 @@ export async function orderDetail(db: Db, user: AuthUser, orderId: string): Prom
     ...[...ctx.slots.values()].flat(),
   ]);
   const name = (id: string | null) => (id ? (names.get(id) ?? '—') : null);
-  const privacy = await privacyFor(db, user, ctx);
   const visibleDocs = docs.filter(privacy.seesDoc);
-  const tasksView = await taskViews(db, user, ctx, visibleDocs);
+  const tasksView = await taskViews(db, user, ctx, visibleDocs, votes);
   // Payments carry amounts, so the same people who may see the full PI see them
   const seePayments = canSeeDoc(user, ctx, 'PI_FULL') || canSeeDoc(user, ctx, 'PAYMENT_PROOF');
   return {
@@ -401,9 +409,7 @@ export async function orderDetail(db: Db, user: AuthUser, orderId: string): Prom
         privateTo: privacy.sharedWith(c.audienceId),
       })),
     canEditComponents: canEditComponents(user, ctx),
-    canCancel:
-      (o.status === 'ACTIVE' || o.status === 'NO_ACTION_NEEDED') &&
-      (user.capabilities.includes('ADMIN') || (ctx.slots.get('MARKETING') ?? []).includes(user.id)),
+    canCancel: (o.status === 'ACTIVE' || o.status === 'NO_ACTION_NEEDED') && canCancel(user, ctx),
     canSeeComponents: canSeeComponents(user, ctx),
     canRename: canRename(user, ctx),
     editableSlots: canEditChain(user, ctx) ? editableSlots(ctx) : [],
@@ -423,7 +429,7 @@ export async function orderTimeline(
   orderId: string,
 ): Promise<OrderEvent[]> {
   const ctx = await visibleCtx(db, user, orderId);
-  const rows = await db
+  const eventsQuery = db
     .select({
       id: orderEvents.id,
       type: orderEvents.type,
@@ -440,8 +446,8 @@ export async function orderTimeline(
     .leftJoin(employees, eq(employees.id, orderEvents.actorId))
     .where(eq(orderEvents.orderId, orderId))
     .orderBy(asc(orderEvents.createdAt));
+  const [rows, privacy] = await Promise.all([eventsQuery, privacyFor(db, user, ctx)]);
   const seePayments = canSeeDoc(user, ctx, 'PI_FULL') || canSeeDoc(user, ctx, 'PAYMENT_PROOF');
-  const privacy = await privacyFor(db, user, ctx);
   const privatePhase = ctx.template.phasePrivacy;
   const shown = (r: (typeof rows)[number]) => {
     if (!privacy.sees(r.audienceId)) return false;
@@ -474,35 +480,36 @@ export async function componentTables(
 ): Promise<ComponentTables> {
   const ctx = await visibleCtx(db, user, orderId);
   if (!canSeeComponents(user, ctx)) throw notFound('Component tables');
-  const rows = await db
-    .select()
-    .from(orderComponents)
-    .where(eq(orderComponents.orderId, orderId))
-    .orderBy(asc(orderComponents.srNo));
-  const products = await db
-    .select()
-    .from(orderProducts)
-    .where(eq(orderProducts.orderId, orderId))
-    .orderBy(asc(orderProducts.position));
-  // The latest reason given for a change to each row, shown in the table (D28)
-  const reasons = await db
-    .selectDistinctOn([componentChanges.componentId], {
-      componentId: componentChanges.componentId,
-      text: componentChanges.comment,
-      byName: employees.name,
-      at: componentChanges.createdAt,
-    })
-    .from(componentChanges)
-    .innerJoin(employees, eq(employees.id, componentChanges.actorId))
-    .where(and(eq(componentChanges.orderId, orderId), isNotNull(componentChanges.comment)))
-    .orderBy(componentChanges.componentId, desc(componentChanges.createdAt));
-  // Each component's latest PO, for those who may open it (D29)
-  const privacy = await privacyFor(db, user, ctx);
-  const pos = await db
-    .select()
-    .from(documents)
-    .where(and(eq(documents.orderId, orderId), eq(documents.kind, 'PO')))
-    .orderBy(desc(documents.uploadedAt));
+  const [rows, reasons, pos, privacy] = await Promise.all([
+    db
+      .select()
+      .from(orderComponents)
+      .where(eq(orderComponents.orderId, orderId))
+      .orderBy(asc(orderComponents.srNo)),
+    // The latest reason given for a change to each row, shown in the table (D28)
+    db
+      .selectDistinctOn([componentChanges.componentId], {
+        componentId: componentChanges.componentId,
+        text: componentChanges.comment,
+        byName: employees.name,
+        at: componentChanges.createdAt,
+      })
+      .from(componentChanges)
+      .innerJoin(employees, eq(employees.id, componentChanges.actorId))
+      .where(and(eq(componentChanges.orderId, orderId), isNotNull(componentChanges.comment)))
+      .orderBy(componentChanges.componentId, desc(componentChanges.createdAt)),
+    // Each component's POs, newest first, for those who may open them (D29)
+    db
+      .select()
+      .from(documents)
+      .where(and(eq(documents.orderId, orderId), eq(documents.kind, 'PO')))
+      .orderBy(desc(documents.uploadedAt)),
+    privacyFor(db, user, ctx),
+  ]);
+  const reasonOf = new Map(reasons.map((n) => [n.componentId, n]));
+  const latestPo = new Map<string, (typeof pos)[number]>();
+  for (const d of pos)
+    if (d.componentId && !latestPo.has(d.componentId)) latestPo.set(d.componentId, d);
   // Ordering delay counts from the day production started, in India time (D27)
   const productionDay = ctx.order.productionStartedAt
     ? localDay(ctx.order.productionStartedAt)
@@ -516,7 +523,7 @@ export async function componentTables(
           ? 'ORDERED'
           : 'NOT_ORDERED';
   return {
-    products: products.map((p) => {
+    products: ctx.products.map((p) => {
       const components: Component[] = rows
         .filter((r) => r.productId === p.id)
         .map((r) => ({
@@ -539,14 +546,14 @@ export async function componentTables(
           deliveryDays: dayCount(r.poDate, r.deliverDate),
           missing: COMPONENT_REQUIRED_FIELDS.filter((f) => r[f] === null),
           po: (() => {
-            const d = pos.find((x) => x.componentId === r.id);
+            const d = latestPo.get(r.id);
             return d && privacy.seesDoc(d)
               ? { id: d.id, kind: d.kind, fileName: d.fileName, fileMime: d.fileMime }
               : null;
           })(),
-          hasPo: pos.some((x) => x.componentId === r.id),
+          hasPo: latestPo.has(r.id),
           note: (() => {
-            const n = reasons.find((x) => x.componentId === r.id);
+            const n = reasonOf.get(r.id);
             return n ? { text: n.text!, byName: n.byName, at: n.at.toISOString() } : null;
           })(),
           delivered: r.deliverDate !== null,

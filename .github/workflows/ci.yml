@@ -19,7 +19,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:b60e90042aa6b8dbecd58e224b3e36114dbf8ad754465264c2476ad58a86e45c
         env:
           POSTGRES_USER: docflow
           POSTGRES_PASSWORD: docflow
@@ -58,6 +58,8 @@ jobs:
       - run: pnpm build
       # Fails on a new high/critical advisory; ignores are justified in pnpm-workspace.yaml
       - run: pnpm audit --audit-level high
+      # What ships (API image, SPA) gets the stricter bar
+      - run: pnpm audit --prod --audit-level moderate
 
   # Browser tests against the real API (local storage driver, no B2) and the production web
   # build with its security headers; includes axe accessibility scans of every screen.
@@ -67,7 +69,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:b60e90042aa6b8dbecd58e224b3e36114dbf8ad754465264c2476ad58a86e45c
         env:
           POSTGRES_USER: docflow
           POSTGRES_PASSWORD: docflow

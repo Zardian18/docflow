@@ -5,7 +5,7 @@ import {
   type OrderDetail,
   type Slot,
 } from '@docflow/shared';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Pencil } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useParams, useSearchParams } from 'react-router';
@@ -28,6 +28,7 @@ import {
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { api, errorMessage } from '@/lib/api';
+import { useRefreshOrder } from '@/lib/refresh';
 import { formatAmount, formatDateTime, formatFileSize } from '@/lib/format';
 import { clockText, ORDER_TONE, orderStatusLabel, PHASE_LABEL } from '@/lib/labels';
 import { cn } from '@/lib/utils';
@@ -49,14 +50,12 @@ function CancelDialog({
   onOpenChange: (o: boolean) => void;
 }) {
   const [reason, setReason] = useState('');
-  const queryClient = useQueryClient();
+  const refresh = useRefreshOrder(order.id, ['order', 'work', 'orders']);
   const cancel = useMutation({
     mutationFn: () => api.orders.cancel(order.id, reason),
     onSuccess: () => {
       toast.success(`${order.ref} cancelled`);
-      queryClient.invalidateQueries({ queryKey: ['order', order.id] });
-      queryClient.invalidateQueries({ queryKey: ['work'] });
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      void refresh();
       onOpenChange(false);
     },
   });

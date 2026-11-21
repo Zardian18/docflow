@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CURRENT_TEMPLATE,
   EXPORT_ORDER_V1,
+  EXPORT_ORDER_V3,
+  EXPORT_ORDER_V4,
   MAX_UPLOAD_BYTES,
   mimeForFileName,
   PresignRequest,
@@ -51,6 +54,28 @@ describe('workflow templates', () => {
     for (const team of ['LOGISTICS', 'ACCOUNTS', 'PRODUCTION'] as const) {
       expect(access.PI_FULL).toContain(team);
     }
+  });
+
+  it('v4 asks for the PI without rates only after the PI with rates is approved (D32)', () => {
+    const step = (k: string) => EXPORT_ORDER_V4.steps.find((s) => s.key === k)!;
+    const pi = step('pi');
+    const chain = step('pi_approval');
+    const noRates = step('pi_no_rates');
+    expect(pi.kind === 'TASK' && pi.docs).toEqual([{ kind: 'PI_FULL', required: true }]);
+    expect(chain.kind === 'APPROVAL_CHAIN' && chain.docToApprove).toEqual(['PI_FULL']);
+    expect(noRates.after).toEqual(['pi_approval']);
+    expect(noRates.kind === 'TASK' && noRates.actor).toEqual({ slot: 'CREATOR' });
+    expect(noRates.kind === 'TASK' && noRates.docs).toEqual([
+      { kind: 'PI_NO_RATES', required: true },
+    ]);
+    expect(step('advance_requested').after).toEqual(['pi_no_rates']);
+    expect(CURRENT_TEMPLATE).toBe(EXPORT_ORDER_V4);
+    // Older versions stay as they were for the orders pinned to them
+    const v3pi = EXPORT_ORDER_V3.steps.find((s) => s.key === 'pi')!;
+    expect(v3pi.kind === 'TASK' && v3pi.docs?.map((d) => d.kind)).toEqual([
+      'PI_FULL',
+      'PI_NO_RATES',
+    ]);
   });
 });
 

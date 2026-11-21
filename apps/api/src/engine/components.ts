@@ -8,12 +8,12 @@ import { componentChanges, orderComponents, orderProducts } from '../db/schema.j
 import { AppError, forbidden, notFound } from '../errors.js';
 import { canEditComponents, canSeeOrder } from './access.js';
 import { localDay } from './clock.js';
-import { advance, loadCtx, logEvent } from './engine.js';
+import { advance, loadCtx, logEvent, type OrderCtx } from './engine.js';
 import { attachFiles, prepareFiles, removeUploadObjects } from './files.js';
 
 type Input = z.output<typeof ComponentInput>;
 
-const EDITABLE: Exclude<ComponentField, never>[] = [
+const EDITABLE: ComponentField[] = [
   'name',
   'kind',
   'poQuantity',
@@ -27,12 +27,21 @@ const EDITABLE: Exclude<ComponentField, never>[] = [
   'tnsRemark',
 ];
 
-/** Locks the order and checks that this person may edit its component tables (Materials, C2) */
-async function editable(tx: Tx, user: AuthUser, orderId: string) {
-  const ctx = await loadCtx(tx, orderId, true);
+/** That this person may edit the order's component tables (Materials, C2); an unseen order is a 404 */
+function checkEditable(user: AuthUser, ctx: OrderCtx) {
   if (!canSeeOrder(user, ctx)) throw notFound('Order');
   if (!canEditComponents(user, ctx)) throw forbidden();
   return ctx;
+}
+
+/** Locks the order, then checks the person may edit its component tables */
+const editable = async (tx: Tx, user: AuthUser, orderId: string) =>
+  checkEditable(user, await loadCtx(tx, orderId, true));
+
+async function componentOr404(db: Db, componentId: string) {
+  const [row] = await db.select().from(orderComponents).where(eq(orderComponents.id, componentId));
+  if (!row) throw notFound('Component');
+  return row;
 }
 
 function checkDates(input: Partial<Input>) {
@@ -121,11 +130,7 @@ export async function addComponent(
 
 export async function updateComponent(db: Db, user: AuthUser, componentId: string, input: Input) {
   checkDates(input);
-  const [existing] = await db
-    .select()
-    .from(orderComponents)
-    .where(eq(orderComponents.id, componentId));
-  if (!existing) throw notFound('Component');
+  const existing = await componentOr404(db, componentId);
   await db.transaction(async (tx) => {
     const ctx = await editable(tx, user, existing.orderId);
     const [row] = await tx
@@ -192,11 +197,7 @@ export async function deleteComponent(
   componentId: string,
   comment: string | null,
 ) {
-  const [existing] = await db
-    .select()
-    .from(orderComponents)
-    .where(eq(orderComponents.id, componentId));
-  if (!existing) throw notFound('Component');
+  const existing = await componentOr404(db, componentId);
   await db.transaction(async (tx) => {
     const ctx = await editable(tx, user, existing.orderId);
     await tx.delete(orderComponents).where(eq(orderComponents.id, componentId));
@@ -231,15 +232,9 @@ export async function uploadComponentPo(
   componentId: string,
   uploadId: string,
 ) {
-  const [existing] = await db
-    .select()
-    .from(orderComponents)
-    .where(eq(orderComponents.id, componentId));
-  if (!existing) throw notFound('Component');
+  const existing = await componentOr404(db, componentId);
   // Who may, before touching the upload (checked again under the lock)
-  const pre = await loadCtx(db, existing.orderId);
-  if (!canSeeOrder(user, pre)) throw notFound('Order');
-  if (!canEditComponents(user, pre)) throw forbidden();
+  checkEditable(user, await loadCtx(db, existing.orderId));
   const { files, discard } = await prepareFiles(db, storage, user.id, existing.orderId, [
     { uploadId, kind: 'PO' },
   ]);

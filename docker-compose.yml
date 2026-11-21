@@ -4,13 +4,14 @@
 #   TEST_DATABASE_URL=postgres://docflow:docflow@localhost:5432/docflow
 services:
   postgres:
-    image: postgres:17
+    image: postgres:17@sha256:b60e90042aa6b8dbecd58e224b3e36114dbf8ad754465264c2476ad58a86e45c
     environment:
       POSTGRES_USER: docflow
       POSTGRES_PASSWORD: docflow
       POSTGRES_DB: docflow
     ports:
-      - '5432:5432'
+      # This machine only: the password is the well-known 'docflow'
+      - '127.0.0.1:5432:5432'
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

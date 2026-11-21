@@ -1,4 +1,11 @@
-import { APPROVER_SLOTS, stepOf, type DocKind, type Team } from '@docflow/shared';
+import {
+  APPROVER_SLOTS,
+  stepOf,
+  type DocKind,
+  type Slot,
+  type Team,
+  type Template,
+} from '@docflow/shared';
 import type { AuthUser } from '../auth/sessions.js';
 import type { OrderCtx } from './engine.js';
 
@@ -19,6 +26,9 @@ export function currentPhase(ctx: OrderCtx): 1 | 2 | 3 {
     .map((t) => stepOf(ctx.template, t.stepKey).phase);
   return open.length > 0 ? (Math.min(...open) as 1 | 2 | 3) : phaseReached(ctx);
 }
+
+export const inSlot = (ctx: OrderCtx, slot: Slot, userId: string) =>
+  (ctx.slots.get(slot) ?? []).includes(userId);
 
 const isNamed = (user: Pick<AuthUser, 'id'>, ctx: OrderCtx) =>
   [...ctx.slots.values()].some((ids) => ids.includes(user.id)) || ctx.order.createdBy === user.id;
@@ -68,11 +78,23 @@ export function seesPhase(
 ) {
   const privacy = ctx.template.phasePrivacy;
   if (!privacy || privacy.phase !== phase) return true;
-  if (user.capabilities.includes('ADMIN') || isApprover(user, ctx)) return true;
-  if (user.teams.some((t) => privacy.involvedTeams.includes(t))) return true;
-  const marketing =
-    user.capabilities.includes('MARKETING') || (ctx.slots.get('MARKETING') ?? []).includes(user.id);
+  if (seesPrivatePhaseByRole(user, ctx.template) || isApprover(user, ctx)) return true;
+  const marketing = user.capabilities.includes('MARKETING') || inSlot(ctx, 'MARKETING', user.id);
   return !marketing;
+}
+
+/** Admin, Approvers, Head Approvers and members of the phase's teams see a private phase */
+export function seesPrivatePhaseByRole(
+  user: Pick<AuthUser, 'teams' | 'capabilities'>,
+  template: Template,
+) {
+  const privacy = template.phasePrivacy;
+  return (
+    !privacy ||
+    user.capabilities.includes('ADMIN') ||
+    hasApproverRole(user) ||
+    user.teams.some((t) => privacy.involvedTeams.includes(t))
+  );
 }
 
 /** Teams of this person that can see the order at the phase it has reached */

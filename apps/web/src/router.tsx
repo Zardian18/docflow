@@ -6,17 +6,26 @@ import { errorMessage } from '@/lib/api';
 import { RequireAuth } from '@/lib/auth';
 import { homeFor } from '@/lib/people';
 import { ChangePasswordPage } from '@/pages/account/ChangePasswordPage';
-import { BuyerFormPage } from '@/pages/admin/buyers/BuyerFormPage';
-import { BuyersPage } from '@/pages/admin/buyers/BuyersPage';
-import { EmployeesPage } from '@/pages/admin/EmployeesPage';
 import { AuthCard } from '@/pages/auth/AuthCard';
 import { ForgotPasswordPage } from '@/pages/auth/ForgotPasswordPage';
 import { LoginPage } from '@/pages/auth/LoginPage';
 import { SetPasswordPage } from '@/pages/auth/SetPasswordPage';
-import { NewOrderPage } from '@/pages/orders/NewOrderPage';
-import { OrderPage } from '@/pages/orders/OrderPage';
 import { OrdersPage } from '@/pages/orders/OrdersPage';
 import { WorkPage } from '@/pages/work/WorkPage';
+
+/**
+ * Pages loaded on first visit, so signing in and My Work don't download the order page and
+ * the admin screens: each becomes its own file in the build.
+ */
+const page =
+  <K extends string>(load: () => Promise<Record<K, React.ComponentType>>, name: K) =>
+  async () => ({ Component: (await load())[name] });
+
+const orderPage = page(() => import('@/pages/orders/OrderPage'), 'OrderPage');
+const newOrderPage = page(() => import('@/pages/orders/NewOrderPage'), 'NewOrderPage');
+const buyersPage = page(() => import('@/pages/admin/buyers/BuyersPage'), 'BuyersPage');
+const buyerFormPage = page(() => import('@/pages/admin/buyers/BuyerFormPage'), 'BuyerFormPage');
+const employeesPage = page(() => import('@/pages/admin/EmployeesPage'), 'EmployeesPage');
 
 function Allow({ capabilities }: { capabilities: Capability[] }) {
   return <RequireAuth allow={capabilities}>{() => <Outlet />}</RequireAuth>;
@@ -60,24 +69,24 @@ export const router = createBrowserRouter([
           { path: '/account/password', element: <ChangePasswordPage /> },
           { path: '/work', element: <WorkPage /> },
           { path: '/orders', element: <OrdersPage /> },
-          { path: '/orders/:id', element: <OrderPage /> },
+          { path: '/orders/:id', lazy: orderPage },
           {
             element: <Allow capabilities={['MARKETING']} />,
-            children: [{ path: '/orders/new', element: <NewOrderPage /> }],
+            children: [{ path: '/orders/new', lazy: newOrderPage }],
           },
           {
             element: <Allow capabilities={['ADMIN', 'MARKETING']} />,
             children: [
-              { path: '/admin/buyers', element: <BuyersPage /> },
-              { path: '/admin/buyers/new', element: <BuyerFormPage /> },
-              { path: '/admin/buyers/:id', element: <BuyerFormPage /> },
+              { path: '/admin/buyers', lazy: buyersPage },
+              { path: '/admin/buyers/new', lazy: buyerFormPage },
+              { path: '/admin/buyers/:id', lazy: buyerFormPage },
             ],
           },
           {
             element: <Allow capabilities={['ADMIN']} />,
             children: [
               { path: '/admin', element: <Navigate to="/orders" replace /> },
-              { path: '/admin/employees', element: <EmployeesPage /> },
+              { path: '/admin/employees', lazy: employeesPage },
             ],
           },
         ],

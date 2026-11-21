@@ -11,6 +11,7 @@ import {
   TAG_LABEL,
   TEAM_LABEL,
   type Actor,
+  type DocKind,
   type Gate,
   OrderCreate,
   orderRef,
@@ -51,7 +52,7 @@ import {
 } from '../db/schema.js';
 import { AppError, conflict, forbidden, notFound } from '../errors.js';
 import type { StorageService } from '../storage/storage.js';
-import { canSeeOrder } from './access.js';
+import { canSeeOrder, inSlot } from './access.js';
 import { instantForLocalDate } from './clock.js';
 import { attachFiles, prepareFiles, removeUploadObjects } from './files.js';
 
@@ -85,35 +86,75 @@ export const holderLabel = (h: Holder) =>
   h.team ? TEAM_LABEL[h.team] : h.slot ? SLOT_INFO[h.slot].label : '—';
 
 export async function loadCtx(tx: Tx | Db, orderId: string, lock = false): Promise<OrderCtx> {
-  const [order] = lock
-    ? await tx.select().from(orders).where(eq(orders.id, orderId)).for('update')
-    : await tx.select().from(orders).where(eq(orders.id, orderId));
-  if (!order) throw notFound('Order');
-  const [slotRows, gateRows, products, taskRows] = await Promise.all([
-    tx
+  const ctx = (await loadCtxs(tx, [orderId], lock)).get(orderId);
+  if (!ctx) throw notFound('Order');
+  return ctx;
+}
+
+/**
+ * Several orders at once, in five queries whatever their number. Inside a transaction the
+ * queries run one after another (one connection can't run two at once), otherwise together.
+ */
+export async function loadCtxs(
+  q: Tx | Db,
+  orderIds: string[],
+  lock = false,
+): Promise<Map<string, OrderCtx>> {
+  const ids = [...new Set(orderIds)];
+  if (ids.length === 0) return new Map();
+  const orderRows = lock
+    ? await q.select().from(orders).where(inArray(orders.id, ids)).for('update')
+    : await q.select().from(orders).where(inArray(orders.id, ids));
+  const slotQ = () =>
+    q
       .select()
       .from(orderSlotPeople)
-      .where(eq(orderSlotPeople.orderId, orderId))
-      .orderBy(asc(orderSlotPeople.ordinal)),
-    tx.select().from(orderSlotGates).where(eq(orderSlotGates.orderId, orderId)),
-    tx
-      .select({ id: orderProducts.id, name: orderProducts.name, position: orderProducts.position })
+      .where(inArray(orderSlotPeople.orderId, ids))
+      .orderBy(asc(orderSlotPeople.ordinal));
+  const gateQ = () => q.select().from(orderSlotGates).where(inArray(orderSlotGates.orderId, ids));
+  const productQ = () =>
+    q
+      .select({
+        orderId: orderProducts.orderId,
+        id: orderProducts.id,
+        name: orderProducts.name,
+        position: orderProducts.position,
+      })
       .from(orderProducts)
-      .where(eq(orderProducts.orderId, orderId))
-      .orderBy(asc(orderProducts.position)),
-    tx.select().from(tasks).where(eq(tasks.orderId, orderId)),
-  ]);
-  const slots = new Map<Slot, string[]>();
-  for (const r of slotRows) slots.set(r.slot, [...(slots.get(r.slot) ?? []), r.employeeId]);
-  return {
-    order,
-    template: findTemplate(order.templateKey, order.templateVersion),
-    slots,
-    gates: new Map(gateRows.map((g) => [g.slot, g.gate])),
-    products,
-    tasks: taskRows,
-  };
+      .where(inArray(orderProducts.orderId, ids))
+      .orderBy(asc(orderProducts.position));
+  const taskQ = () => q.select().from(tasks).where(inArray(tasks.orderId, ids));
+  const [slotRows, gateRows, productRows, taskRows] =
+    'rollback' in q
+      ? [await slotQ(), await gateQ(), await productQ(), await taskQ()]
+      : await Promise.all([slotQ(), gateQ(), productQ(), taskQ()]);
+  return new Map(
+    orderRows.map((order) => {
+      const slots = new Map<Slot, string[]>();
+      for (const r of slotRows) {
+        if (r.orderId === order.id) slots.set(r.slot, [...(slots.get(r.slot) ?? []), r.employeeId]);
+      }
+      return [
+        order.id,
+        {
+          order,
+          template: findTemplate(order.templateKey, order.templateVersion),
+          slots,
+          gates: new Map(
+            gateRows.filter((g) => g.orderId === order.id).map((g) => [g.slot, g.gate]),
+          ),
+          products: productRows
+            .filter((p) => p.orderId === order.id)
+            .map(({ id, name, position }) => ({ id, name, position })),
+          tasks: taskRows.filter((t) => t.orderId === order.id),
+        },
+      ];
+    }),
+  );
 }
+
+/** Done or cancelled: nothing on the order can change any more */
+const isClosed = (order: OrderRow) => order.status === 'DONE' || order.status === 'CANCELLED';
 
 const taskOf = (ctx: OrderCtx, stepKey: string, productId: string | null) =>
   ctx.tasks.find((t) => t.stepKey === stepKey && t.productId === productId);
@@ -126,39 +167,61 @@ export function isHolder(user: Pick<AuthUser, 'id' | 'teams'>, ctx: OrderCtx, ho
   return false;
 }
 
-/** The actions the signed-in person can take on a task right now (Admin acts on none, Q9) */
+type VoteRow = Pick<typeof approvalVotes.$inferSelect, 'taskId' | 'run' | 'stage' | 'employeeId'>;
+
+/**
+ * The actions the signed-in person can take on a task right now (Admin acts on none, Q9).
+ * `votes`, when the caller has already loaded the order's votes, saves a query per task.
+ */
 export async function actionsFor(
   tx: Tx | Db,
   user: Pick<AuthUser, 'id' | 'teams'>,
   ctx: OrderCtx,
   task: TaskRow,
+  votes?: VoteRow[],
 ): Promise<TaskAction[]> {
-  if (task.status !== 'OPEN' || ctx.order.status === 'DONE' || ctx.order.status === 'CANCELLED') {
+  if (task.status !== 'OPEN' || isClosed(ctx.order)) {
     return [];
   }
   const holder = { team: task.holderTeam, slot: task.holderSlot };
   if (!isHolder(user, ctx, holder)) return [];
-  const step = stepOf(ctx.template, task.stepKey);
-  switch (step.kind) {
+  const { kind } = stepOf(ctx.template, task.stepKey);
+  if (kind === 'APPROVAL_CHAIN') {
+    // One vote per person per stage per run
+    const mine = (v: VoteRow) =>
+      v.taskId === task.id &&
+      v.run === task.run &&
+      v.stage === (task.side ?? '') &&
+      v.employeeId === user.id;
+    const voted = votes
+      ? votes.some(mine)
+      : (
+          await tx
+            .select({ id: approvalVotes.id })
+            .from(approvalVotes)
+            .where(
+              and(
+                eq(approvalVotes.taskId, task.id),
+                eq(approvalVotes.run, task.run),
+                eq(approvalVotes.stage, task.side ?? ''),
+                eq(approvalVotes.employeeId, user.id),
+              ),
+            )
+        ).length > 0;
+    if (voted) return [];
+  }
+  return actionsOfKind(kind, task.side);
+}
+
+/** What the holder of an open task of this kind can do, on this side of it */
+export function actionsOfKind(kind: StepDef['kind'], side: string | null): TaskAction[] {
+  switch (kind) {
     case 'TASK':
       return ['COMPLETE'];
     case 'REVIEW_LOOP':
-      return task.side === 'REVIEWER' ? ['CONFIRM', 'RETURN'] : ['SUBMIT'];
-    case 'APPROVAL_CHAIN': {
-      // One vote per person per stage per run
-      const [voted] = await tx
-        .select({ id: approvalVotes.id })
-        .from(approvalVotes)
-        .where(
-          and(
-            eq(approvalVotes.taskId, task.id),
-            eq(approvalVotes.run, task.run),
-            eq(approvalVotes.stage, task.side ?? ''),
-            eq(approvalVotes.employeeId, user.id),
-          ),
-        );
-      return voted ? [] : ['APPROVE', 'REJECT'];
-    }
+      return side === 'REVIEWER' ? ['CONFIRM', 'RETURN'] : ['SUBMIT'];
+    case 'APPROVAL_CHAIN':
+      return ['APPROVE', 'REJECT'];
     case 'STATUS_LOG':
       return ['LOG'];
     case 'CHECKPOINT_LOG':
@@ -181,6 +244,26 @@ function takesPart(user: Pick<AuthUser, 'id' | 'teams'>, ctx: OrderCtx, step: St
           ? []
           : [step.actor];
   return actors.some((a) => isHolder(user, ctx, actorHolder(a)));
+}
+
+/**
+ * Throws unless this person can take this action on this task now. Someone who takes part in
+ * the step but finds it moved on (a colleague acted first, or it is with the other side) gets
+ * a conflict; anyone else is simply not allowed.
+ */
+async function allowedAction(
+  tx: Tx | Db,
+  user: Pick<AuthUser, 'id' | 'teams'>,
+  ctx: OrderCtx,
+  task: TaskRow,
+  action: TaskAction,
+) {
+  if ((await actionsFor(tx, user, ctx, task)).includes(action)) return;
+  if (!takesPart(user, ctx, stepOf(ctx.template, task.stepKey))) throw forbidden();
+  throw conflict(
+    'ALREADY_HANDLED',
+    'This step has moved on since you opened it. Refresh to see where it is now.',
+  );
 }
 
 // ---- Low-level moves ---------------------------------------------------------------
@@ -213,8 +296,8 @@ export async function logEvent(
   });
 }
 
-/** Hands a task to a new holder (or to nobody), closing the previous holder interval. */
-async function setHolder(tx: Tx, task: TaskRow, holder: Holder | null, reason: string) {
+/** Hands a task to a new holder (or to nobody), closing the previous holder interval; saves the task. */
+async function handOver(tx: Tx, task: TaskRow, holder: Holder | null, reason: string) {
   await tx
     .update(holderIntervals)
     .set({ endedAt: sql`clock_timestamp()` })
@@ -230,9 +313,6 @@ async function setHolder(tx: Tx, task: TaskRow, holder: Holder | null, reason: s
       reason,
     });
   }
-}
-
-async function saveTask(tx: Tx, task: TaskRow) {
   await tx
     .update(tasks)
     .set({
@@ -324,8 +404,7 @@ async function openTask(
       task.side = null;
       holder = actorHolder(step.actor);
   }
-  await setHolder(tx, task, holder, reason);
-  await saveTask(tx, task);
+  await handOver(tx, task, holder, reason);
   await logEvent(tx, {
     orderId: ctx.order.id,
     type: 'STEP_OPENED',
@@ -352,8 +431,7 @@ async function completeTask(
   task.status = 'DONE';
   task.doneAt = new Date();
   task.doneBy = userId;
-  await setHolder(tx, task, null, 'DONE');
-  await saveTask(tx, task);
+  await handOver(tx, task, null, 'DONE');
   const o = ctx.order;
   switch (step.effect) {
     case 'START_CHAIN':
@@ -387,8 +465,7 @@ async function completeTask(
           t.status = 'DONE';
           t.doneAt = new Date();
           t.doneBy = userId;
-          await setHolder(tx, t, null, 'DONE');
-          await saveTask(tx, t);
+          await handOver(tx, t, null, 'DONE');
         }
       }
       await logEvent(tx, { orderId: o.id, type: 'STATUS_CHANGED', details: { status: 'DONE' } });
@@ -446,18 +523,22 @@ async function gateSatisfied(tx: Tx, ctx: OrderCtx, step: StepDef) {
  * holds, until nothing changes. Called after every action.
  */
 export async function advance(tx: Tx, ctx: OrderCtx) {
-  if (ctx.order.status === 'CANCELLED' || ctx.order.status === 'DONE') return;
+  if (isClosed(ctx.order)) return;
+  // Components don't change while advancing, so a gate found unmet stays unmet
+  const unmet = new Set<string>();
+  const gateMet = async (step: StepDef) => {
+    if (unmet.has(step.key)) return false;
+    const met = await gateSatisfied(tx, ctx, step);
+    if (!met) unmet.add(step.key);
+    return met;
+  };
   for (let changed = true; changed;) {
     changed = false;
     for (const step of ctx.template.steps) {
       const instances = step.perProduct ? ctx.products.map((p) => p.id) : [null];
       for (const productId of instances) {
         const task = taskOf(ctx, step.key, productId);
-        if (
-          task?.status === 'OPEN' &&
-          step.kind === 'DATA_GATE' &&
-          (await gateSatisfied(tx, ctx, step))
-        ) {
+        if (task?.status === 'OPEN' && step.kind === 'DATA_GATE' && (await gateMet(step))) {
           await completeTask(tx, ctx, task, step, null);
           await logEvent(tx, {
             orderId: ctx.order.id,
@@ -600,12 +681,13 @@ export async function createOrder(db: Db, user: AuthUser, input: CreateInput) {
   });
 }
 
-const inSlot = (ctx: OrderCtx, slot: Slot, userId: string) =>
-  (ctx.slots.get(slot) ?? []).includes(userId);
+/** Admin and the order's Marketing person may cancel an order that is still open */
+export const canCancel = (user: Pick<AuthUser, 'id' | 'capabilities'>, ctx: OrderCtx) =>
+  user.capabilities.includes('ADMIN') || inSlot(ctx, 'MARKETING', user.id);
 
 /** Who may change the order number: the Creator, the order's Marketing person, and Admin (D27) */
 export function canRename(user: Pick<AuthUser, 'id' | 'capabilities'>, ctx: OrderCtx) {
-  if (ctx.order.status === 'DONE' || ctx.order.status === 'CANCELLED') return false;
+  if (isClosed(ctx.order)) return false;
   return (
     user.capabilities.includes('ADMIN') ||
     inSlot(ctx, 'CREATOR', user.id) ||
@@ -653,7 +735,7 @@ export async function renameOrder(db: Db, user: AuthUser, orderId: string, ref: 
  * not started.
  */
 export function editableSlots(ctx: OrderCtx): Slot[] {
-  if (ctx.order.status === 'DONE' || ctx.order.status === 'CANCELLED') return [];
+  if (isClosed(ctx.order)) return [];
   const result = new Set<Slot>();
   for (const step of ctx.template.steps) {
     if (step.kind !== 'APPROVAL_CHAIN') continue;
@@ -738,17 +820,15 @@ export async function updateOrderSlot(
 export async function cancelOrder(db: Db, user: AuthUser, orderId: string, reason: string) {
   await db.transaction(async (tx) => {
     const ctx = await loadCtx(tx, orderId, true);
-    const allowed =
-      user.capabilities.includes('ADMIN') || (ctx.slots.get('MARKETING') ?? []).includes(user.id);
-    if (!allowed) throw forbidden();
-    if (ctx.order.status === 'DONE' || ctx.order.status === 'CANCELLED') {
+    if (!canSeeOrder(user, ctx)) throw notFound('Order');
+    if (!canCancel(user, ctx)) throw forbidden();
+    if (isClosed(ctx.order)) {
       throw conflict('ORDER_CLOSED', 'This order is already closed.');
     }
     for (const t of ctx.tasks) {
       if (t.status === 'OPEN' || t.status === 'WAITING') {
         t.status = 'CANCELLED';
-        await setHolder(tx, t, null, 'CANCELLED');
-        await saveTask(tx, t);
+        await handOver(tx, t, null, 'CANCELLED');
       }
     }
     await tx
@@ -780,7 +860,7 @@ export async function replaceSlotPerson(
   if (!user.capabilities.includes('ADMIN')) throw forbidden();
   await db.transaction(async (tx) => {
     const ctx = await loadCtx(tx, orderId, true);
-    if (ctx.order.status === 'DONE' || ctx.order.status === 'CANCELLED') {
+    if (isClosed(ctx.order)) {
       throw conflict('ORDER_CLOSED', 'This order is already closed.');
     }
     const current = ctx.slots.get(input.slot) ?? [];
@@ -841,24 +921,29 @@ export async function act(
     .from(tasks)
     .where(eq(tasks.id, taskId));
   if (!found) throw notFound('Task');
+  // Who may act is checked before any file is copied; an order someone can't see is a 404
+  // (invariant 9). The check is repeated under the lock below.
+  const seen = await loadCtx(db, found.orderId);
+  if (!canSeeOrder(user, seen)) throw notFound('Task');
+  await allowedAction(
+    db,
+    user,
+    seen,
+    seen.tasks.find((t) => t.id === taskId)!,
+    input.action,
+  );
   const { files, discard } = await prepareFiles(db, storage, user.id, found.orderId, input.uploads);
   try {
     await db.transaction(async (tx) => {
       const ctx = await loadCtx(tx, found.orderId, true);
       const task = ctx.tasks.find((t) => t.id === taskId)!;
-      const allowed = await actionsFor(tx, user, ctx, task);
-      if (!allowed.includes(input.action)) {
-        // Someone who takes part in this step but finds it moved on (a colleague acted first,
-        // or it is with the other side) gets a conflict; anyone else is simply not allowed
-        if (!takesPart(user, ctx, stepOf(ctx.template, task.stepKey))) throw forbidden();
-        throw conflict(
-          'ALREADY_HANDLED',
-          'This step has moved on since you opened it. Refresh to see where it is now.',
-        );
-      }
+      await allowedAction(tx, user, ctx, task, input.action);
       const step = stepOf(ctx.template, task.stepKey);
       const actingAs = (task.holderTeam ?? task.holderSlot)!;
-      const audience = await createAudience(tx, ctx, step, user.id, input);
+      // Looked up once: private messages tag them (D32), payment proofs notify them
+      const needApprovers = !!input.privateTo || files.some((f) => f.kind === 'PAYMENT_PROOF');
+      const approvers = needApprovers ? await orderApprovers(tx, ctx) : [];
+      const audience = await createAudience(tx, ctx, step, user.id, input, approvers);
       const base: Base = {
         orderId: ctx.order.id,
         taskId: task.id,
@@ -867,15 +952,18 @@ export async function act(
         actingAs,
         audienceId: audience?.id ?? null,
       };
-      const docsFor = (roundId: string | null) =>
-        attachFiles(tx, files, {
+      let attached = files.length === 0;
+      const docsFor = (roundId: string | null) => {
+        attached = true;
+        return attachFiles(tx, files, {
           orderId: ctx.order.id,
           taskId: task.id,
           roundId,
           userId: user.id,
           audienceId: base.audienceId,
         });
-      const allowedKinds = new Set(stepDocKinds(step));
+      };
+      const allowedKinds = new Set(stepDocKinds(step, task.side));
       for (const f of files) {
         if (!allowedKinds.has(f.kind))
           throw badRequest('DOC_NOT_EXPECTED', 'That document doesn’t belong to this step.');
@@ -937,6 +1025,9 @@ export async function act(
           await logEvent(tx, { ...base, type: 'CLOSED', comment: input.comment });
           break;
       }
+      // A file sent with an action that doesn't keep it (e.g. a confirm) would be lost
+      if (!attached)
+        throw badRequest('DOC_NOT_EXPECTED', 'That document doesn’t belong to this step.');
       // Dashboard notices (D29): a private message for those it is shared with, and a payment
       // proof for the order's approvers and Head Approvers
       const product = ctx.products.find((p) => p.id === task.productId)?.name;
@@ -957,16 +1048,13 @@ export async function act(
             title: t,
             actorId: user.id,
             comment: input.comment,
+            audienceId: base.audienceId,
           })),
         );
       };
       if (audience) await notify(audience.notify, 'PRIVATE_MESSAGE', title);
       if (files.some((f) => f.kind === 'PAYMENT_PROOF')) {
-        await notify(
-          APPROVER_SLOTS.flatMap((s) => ctx.slots.get(s) ?? []),
-          'PAYMENT_PROOF',
-          `${DOC_KIND_LABEL.PAYMENT_PROOF} · ${step.title}`,
-        );
+        await notify(approvers, 'PAYMENT_PROOF', `${DOC_KIND_LABEL.PAYMENT_PROOF} · ${step.title}`);
       }
       await tx.update(orders).set({ updatedAt: new Date() }).where(eq(orders.id, ctx.order.id));
       await advance(tx, ctx);
@@ -1019,10 +1107,39 @@ export function shareableCondition(ctx: OrderCtx) {
 }
 
 /**
+ * The approvers and Head Approvers on this order, in any slot (D32): everyone in an approver
+ * or Head Approver slot, and anyone on another slot (Marketing, Creator) who holds Approver or
+ * Head Approver. Every private message tags them.
+ */
+async function orderApprovers(tx: Tx, ctx: OrderCtx) {
+  const onOrder = [...new Set([...ctx.slots.values()].flat())];
+  const byRole = onOrder.length
+    ? await tx
+        .selectDistinct({ id: employeeCapabilities.employeeId })
+        .from(employeeCapabilities)
+        .innerJoin(employees, eq(employees.id, employeeCapabilities.employeeId))
+        .where(
+          and(
+            inArray(employeeCapabilities.employeeId, onOrder),
+            inArray(employeeCapabilities.capability, ['APPROVER', 'HEAD_APPROVER']),
+            eq(employees.isActive, true),
+          ),
+        )
+    : [];
+  return [
+    ...new Set([
+      ...APPROVER_SLOTS.flatMap((s) => ctx.slots.get(s) ?? []),
+      ...byRole.map((r) => r.id),
+    ]),
+  ];
+}
+
+/**
  * A private action (D29): who sees it is fixed now. The writer, the people and teams they
  * tagged, and everyone taking part in the step (so whoever gets the work back can read why).
- * Approvers, Head Approvers and Admin always see it too, checked when reading. Returns who
- * gets a dashboard notice: the tagged people, members of tagged teams, and the approvers.
+ * The order's approvers and Head Approvers, in any slot, are tagged by default (D32); every
+ * Approver, Head Approver and Admin can read it too, checked when reading. Returns who gets a
+ * dashboard notice: the tagged people (approvers included) and members of tagged teams.
  */
 async function createAudience(
   tx: Tx,
@@ -1030,6 +1147,7 @@ async function createAudience(
   step: StepDef,
   writerId: string,
   input: ActionInput,
+  orderApproverIds: string[],
 ) {
   if (!input.privateTo) return null;
   const tagged = input.privateTo;
@@ -1045,6 +1163,9 @@ async function createAudience(
       );
     }
   }
+  // The order's approvers are tagged by default (D32), except the writer
+  const approvers = orderApproverIds.filter((id) => id !== writerId);
+  const taggedPeople = [...new Set([...tagged.employeeIds, ...approvers])];
   const people = new Set<string>([writerId]);
   const teams = new Set<Team>();
   for (const a of stepActors(ctx, step)) {
@@ -1056,10 +1177,10 @@ async function createAudience(
     .values({ orderId: ctx.order.id, createdBy: writerId })
     .returning({ id: audiences.id });
   const members = [
-    ...tagged.employeeIds.map((employeeId) => ({ employeeId, team: null, tagged: true })),
+    ...taggedPeople.map((employeeId) => ({ employeeId, team: null, tagged: true })),
     ...tagged.teams.map((team) => ({ employeeId: null, team, tagged: true })),
     ...[...people]
-      .filter((id) => !tagged.employeeIds.includes(id))
+      .filter((id) => !taggedPeople.includes(id))
       .map((employeeId) => ({ employeeId, team: null, tagged: false })),
     ...[...teams]
       .filter((t) => !tagged.teams.includes(t))
@@ -1075,11 +1196,7 @@ async function createAudience(
     : [];
   return {
     id: row!.id,
-    notify: [
-      ...tagged.employeeIds,
-      ...inTaggedTeams.map((r) => r.id),
-      ...APPROVER_SLOTS.flatMap((s) => ctx.slots.get(s) ?? []),
-    ],
+    notify: [...taggedPeople, ...inTaggedTeams.map((r) => r.id)],
   };
 }
 
@@ -1091,11 +1208,16 @@ function loggedDate(date: string | undefined) {
   }
 }
 
-function stepDocKinds(step: StepDef) {
+/**
+ * The document kinds a step accepts. On an approval chain only a stage recording a payment
+ * takes one: that stage (`side`), or any of them when no side is given.
+ */
+export function stepDocKinds(step: StepDef, side?: string | null): DocKind[] {
   if (step.kind === 'TASK') return (step.docs ?? []).map((d) => d.kind);
   if (step.kind === 'REVIEW_LOOP') return step.doc ? [step.doc] : [];
   if (step.kind === 'APPROVAL_CHAIN') {
-    return step.stages.some((s) => s.form === 'PAYMENT') ? (['PAYMENT_PROOF'] as const) : [];
+    const stages = side === undefined ? step.stages : step.stages.filter((s) => s.key === side);
+    return stages.some((s) => s.form === 'PAYMENT') ? ['PAYMENT_PROOF'] : [];
   }
   return [];
 }
@@ -1304,8 +1426,7 @@ async function reviewAction(
       })
       .where(eq(channelRounds.id, round.id));
     task.side = 'REVIEWER';
-    await setHolder(tx, task, actorHolder(step.reviewer), 'SUBMITTED');
-    await saveTask(tx, task);
+    await handOver(tx, task, actorHolder(step.reviewer), 'SUBMITTED');
     await logEvent(tx, {
       ...base,
       type: 'SUBMITTED',
@@ -1362,8 +1483,7 @@ async function reviewAction(
     .where(eq(channelRounds.id, round.id));
   await nextRound(tx, task, step.channel);
   task.side = 'SUBMITTER';
-  await setHolder(tx, task, actorHolder(target), 'RETURNED');
-  await saveTask(tx, task);
+  await handOver(tx, task, actorHolder(target), 'RETURNED');
   await logEvent(tx, {
     ...base,
     type: 'RETURNED',
@@ -1427,8 +1547,7 @@ async function approvalAction(
       // Back to the first stage, as a new run (the payment check returns to Accounts, Q45)
       task.run += 1;
       task.side = step.stages[0]!.key;
-      await setHolder(tx, task, actorHolder(step.stages[0]!.actor), 'RESTARTED');
-      await saveTask(tx, task);
+      await handOver(tx, task, actorHolder(step.stages[0]!.actor), 'RESTARTED');
       await logEvent(tx, {
         orderId: ctx.order.id,
         type: 'CHAIN_RESTARTED',
@@ -1439,8 +1558,7 @@ async function approvalAction(
     } else {
       // Back to the step that produced what was rejected; this chain re-runs after it (Q16)
       task.status = 'WAITING';
-      await setHolder(tx, task, null, 'REJECTED');
-      await saveTask(tx, task);
+      await handOver(tx, task, null, 'REJECTED');
       const target = stepOf(ctx.template, step.onReject.reopen);
       const targetTask = taskOf(ctx, target.key, null)!;
       targetTask.status = 'WAITING';
@@ -1488,8 +1606,7 @@ async function maybeFinishStage(
   const next = step.stages[index + 1];
   if (next) {
     task.side = next.key;
-    await setHolder(tx, task, actorHolder(next.actor), 'NEXT_STAGE');
-    await saveTask(tx, task);
+    await handOver(tx, task, actorHolder(next.actor), 'NEXT_STAGE');
     await logEvent(tx, {
       orderId: ctx.order.id,
       type: 'STAGE_PASSED',

@@ -1,7 +1,7 @@
-import { DOC_KIND_LABEL, type ReviewDoc } from '@docflow/shared';
+import { DOC_KIND_LABEL, viewableInline, type ReviewDoc } from '@docflow/shared';
 import { Download, Eye, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { canView, openDocument } from '@/lib/documents';
+import { openDocument } from '@/lib/documents';
 import { cn } from '@/lib/utils';
 
 /** View and Download for one document; the accessible names say which document (D27) */
@@ -16,7 +16,7 @@ export function DocumentButtons({
   const cls = size === 'xs' ? 'h-7 px-2 text-xs' : undefined;
   return (
     <span className="flex shrink-0 gap-1">
-      {canView(doc.fileMime) && (
+      {viewableInline(doc.fileMime) && (
         <Button
           type="button"
           size="sm"

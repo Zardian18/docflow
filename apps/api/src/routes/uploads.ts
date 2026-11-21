@@ -1,15 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { PresignRequest, PresignResponse } from '@docflow/shared';
+import { and, count, eq, gt, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { uploads } from '../db/schema.js';
+import {
+  MAX_PENDING_UPLOAD_BYTES,
+  MAX_PENDING_UPLOADS,
+  UPLOAD_RECORD_HOURS,
+  UPLOAD_URL_SECONDS,
+} from '../engine/files.js';
+import { AppError } from '../errors.js';
 import { currentUser, requireUser } from '../plugins/auth.js';
 import type { StorageService } from '../storage/storage.js';
 import { perUserLimit, type RouteDeps } from './deps.js';
-
-/** How long the browser has to start the PUT. */
-const UPLOAD_URL_SECONDS = 10 * 60;
-/** How long an uploaded-but-unattached file stays usable. */
-const UPLOAD_RECORD_HOURS = 24;
 
 export const uploadRoutes: FastifyPluginAsyncZod<RouteDeps & { storage: StorageService }> = async (
   app,
@@ -29,6 +32,26 @@ export const uploadRoutes: FastifyPluginAsyncZod<RouteDeps & { storage: StorageS
     async (request) => {
       const user = currentUser(request);
       const { fileName, contentType, size } = request.body;
+      const [pending] = await db
+        .select({ n: count(), bytes: sql<number>`coalesce(sum(${uploads.fileSize}), 0)::bigint` })
+        .from(uploads)
+        .where(
+          and(
+            eq(uploads.createdBy, user.id),
+            isNull(uploads.consumedAt),
+            gt(uploads.expiresAt, new Date()),
+          ),
+        );
+      if (
+        (pending?.n ?? 0) >= MAX_PENDING_UPLOADS ||
+        Number(pending?.bytes ?? 0) + size > MAX_PENDING_UPLOAD_BYTES
+      ) {
+        throw new AppError(
+          429,
+          'TOO_MANY_UPLOADS',
+          'You have too many files uploaded but not yet sent. Send or discard them first, or try again tomorrow.',
+        );
+      }
       const id = randomUUID();
       const objectKey = `uploads/${user.id}/${id}`;
       await db.insert(uploads).values({

@@ -23,12 +23,6 @@ export function paginated<T extends z.ZodType>(item: T) {
     pageSize: z.number().int().positive(),
   });
 }
-export interface Paginated<T> {
-  items: T[];
-  total: number;
-  page: number;
-  pageSize: number;
-}
 
 /** Every API error body. `details` carries structured context (e.g. blocking companies). */
 export const ApiErrorBody = z.object({
@@ -110,6 +104,10 @@ export type EmployeeListQuery = z.input<typeof EmployeeListQuery>;
 /** A person in a picker */
 export const PersonOption = z.object({ id: z.uuid(), name: z.string(), email: z.string() });
 export type PersonOption = z.infer<typeof PersonOption>;
+
+/** Someone a private message can be shared with: the name only, no email (F11) */
+export const ShareCandidate = PersonOption.pick({ id: true, name: true });
+export type ShareCandidate = z.infer<typeof ShareCandidate>;
 
 export const PeopleSearchQuery = z.object({
   q: z.string().trim().max(100).default(''),

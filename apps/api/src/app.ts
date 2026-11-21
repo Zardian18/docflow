@@ -92,6 +92,29 @@ function secretsMatch(provided: string | undefined, expected: string): boolean {
   return timingSafeEqual(a, b);
 }
 
+/**
+ * Errors as logged. A failed query's message and stack hold the SQL parameters (emails,
+ * password hashes, private comments), so only the database's own error is kept (F6).
+ */
+export function safeError(err: Error) {
+  const cause = err.cause as (Error & { code?: string; constraint?: string }) | undefined;
+  if (err.name === 'DrizzleQueryError' || 'params' in err) {
+    return {
+      type: err.name,
+      message: 'Failed query',
+      code: cause?.code,
+      constraint: cause?.constraint,
+      stack: cause?.stack ?? '',
+    };
+  }
+  return {
+    type: err.name,
+    message: err.message,
+    code: (err as { code?: unknown }).code,
+    stack: err.stack ?? '',
+  };
+}
+
 export async function buildApp({
   env,
   db,
@@ -112,6 +135,7 @@ export async function buildApp({
           method: req.method,
           path: req.url.split('?')[0],
         }),
+        err: safeError,
       },
       ...(env.NODE_ENV === 'development' ? { transport: { target: 'pino-pretty' } } : {}),
     },
@@ -125,6 +149,8 @@ export async function buildApp({
 
   app.addHook('onRequest', async (request, reply) => {
     reply.header('x-request-id', request.id);
+    // Answers are per person; no browser or proxy keeps a copy (F10)
+    reply.header('cache-control', 'no-store');
   });
 
   app.setValidatorCompiler(validatorCompiler);
@@ -196,17 +222,12 @@ export async function buildApp({
     () => ({ status: 'ok' as const, commit: env.RENDER_GIT_COMMIT?.slice(0, 7) ?? null }),
   );
 
+  // Database reachability only; nothing about the data (F9)
   app.get('/v1/ping', { schema: { response: { 200: PingResponse } } }, async () => {
-    const result = await db.execute<{ db_time: Date; employee_count: number }>(
-      sql`select now() as db_time, (select count(*)::int from employees) as employee_count`,
-    );
+    const result = await db.execute<{ db_time: Date }>(sql`select now() as db_time`);
     const row = result.rows[0];
     if (!row) throw new Error('ping query returned no rows');
-    return {
-      message: 'pong' as const,
-      dbTime: new Date(row.db_time).toISOString(),
-      employeeCount: row.employee_count,
-    };
+    return { message: 'pong' as const, dbTime: new Date(row.db_time).toISOString() };
   });
 
   if (local) {

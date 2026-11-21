@@ -1,5 +1,5 @@
 import { OrderRef, SLOT_INFO, type OrderDetail, type Slot } from '@docflow/shared';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { useId, useState } from 'react';
 import { toast } from 'sonner';
 import { FormError } from '@/components/forms';
@@ -17,16 +17,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { api, ApiError, errorMessage } from '@/lib/api';
+import { useRefreshOrder } from '@/lib/refresh';
 import { slotValueProblems, type SlotValue } from '@/lib/slots';
-
-function useRefreshOrder(orderId: string) {
-  const queryClient = useQueryClient();
-  return () => {
-    for (const key of [['order', orderId], ['order-timeline', orderId], ['orders'], ['work']]) {
-      queryClient.invalidateQueries({ queryKey: key });
-    }
-  };
-}
 
 /** The Creator (or Marketing, Admin) changes the order number, e.g. to the PI's (D27) */
 export function RenameOrderDialog({
@@ -41,7 +33,7 @@ export function RenameOrderDialog({
   const id = useId();
   const [ref, setRef] = useState(order.ref);
   const [problem, setProblem] = useState<string>();
-  const refresh = useRefreshOrder(order.id);
+  const refresh = useRefreshOrder(order.id, ['order', 'timeline', 'orders', 'work']);
   const rename = useMutation({
     mutationFn: () => api.orders.rename(order.id, ref.trim()),
     onSuccess: () => {
@@ -120,7 +112,7 @@ export function ChangeSlotDialog({
     },
   ]);
   const [reason, setReason] = useState('');
-  const refresh = useRefreshOrder(order.id);
+  const refresh = useRefreshOrder(order.id, ['order', 'timeline', 'orders', 'work']);
   const save = useMutation({
     mutationFn: () =>
       api.orders.updateSlot(order.id, slot, {

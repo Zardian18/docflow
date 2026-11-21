@@ -8,9 +8,9 @@ import {
   type LoginRequest as LoginBody,
 } from '@docflow/shared';
 import { and, eq } from 'drizzle-orm';
-import type { FastifyRequest } from 'fastify';
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { getDummyHash, hashPassword, verifyPassword } from '../auth/crypto.js';
+import { LoginGuard } from '../auth/login-guard.js';
 import { consumePasswordToken } from '../auth/password-links.js';
 import {
   createSession,
@@ -57,32 +57,24 @@ export const authRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db, en
     },
   });
 
-  // A second, slower limit per account from any number of IPs (Phase 7 finding 1). The
-  // plugin runs only one hook-style limiter per request, so this one is checked by hand.
-  const checkEmail = app.createRateLimit({
-    max: limits.loginAttemptsPerEmail,
-    timeWindow: '15 minutes',
-    keyGenerator: (request) => {
-      const email = (request.body as Partial<LoginBody> | undefined)?.email;
-      return `email|${typeof email === 'string' ? email.trim().toLowerCase() : ''}`;
-    },
-  });
-  const perEmail = async (request: FastifyRequest) => {
-    const result = await checkEmail(request);
-    if (!result.isAllowed && result.isExceeded) {
-      throw new AppError(429, 'RATE_LIMITED', 'Too many attempts. Please wait and try again.');
-    }
-  };
+  // Failed sign-ins per account and per address (Phase 7 finding 1)
+  const guard = new LoginGuard(limits.loginAttemptsPerEmail, limits.loginFailuresPerIp);
 
   app.post(
     '/login',
     {
       schema: { body: LoginRequest, response: { 200: Me } },
       config: rateLimit('email'),
-      preHandler: perEmail,
     },
     async (request, reply) => {
       const { email, password } = request.body;
+      if (guard.blocked(email, request.ip)) {
+        throw new AppError(429, 'RATE_LIMITED', 'Too many attempts. Please wait and try again.');
+      }
+      const failed = () => {
+        guard.fail(email, request.ip);
+        return invalidCredentials();
+      };
       const [row] = await db
         .select({
           id: employees.id,
@@ -109,9 +101,9 @@ export const authRoutes: FastifyPluginAsyncZod<RouteDeps> = async (app, { db, en
 
       if (!user || !row?.passwordHash) {
         await verifyPassword(await getDummyHash(), password);
-        throw invalidCredentials();
+        throw failed();
       }
-      if (!(await verifyPassword(row.passwordHash, password))) throw invalidCredentials();
+      if (!(await verifyPassword(row.passwordHash, password))) throw failed();
 
       const { token, expiresAt } = await db.transaction(async (tx) => {
         // Signing in over an existing session (another account, or the same one) ends it

@@ -74,6 +74,7 @@ export async function testApp(
     limits: {
       authAttemptsPerMinute: 1000,
       loginAttemptsPerEmail: 1000,
+      loginFailuresPerIp: 1000,
       passwordChangesPerMinute: 1000,
       userActionsPerMinute: 1000,
     },

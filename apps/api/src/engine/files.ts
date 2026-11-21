@@ -31,6 +31,14 @@ async function sha256Of(storage: StorageService, key: string): Promise<string> {
 
 const fileProblem = (code: string, message: string) => new AppError(400, code, message);
 
+/** How long the browser has to start the PUT of a presigned upload. */
+export const UPLOAD_URL_SECONDS = 10 * 60;
+/** How long an uploaded-but-unattached file stays usable. */
+export const UPLOAD_RECORD_HOURS = 24;
+/** Unattached uploads one person may have at once (F5: one account can't fill the bucket). */
+export const MAX_PENDING_UPLOADS = 40;
+export const MAX_PENDING_UPLOAD_BYTES = 400 * 1024 * 1024;
+
 export interface PreparedFile {
   uploadId: string;
   uploadKey: string;

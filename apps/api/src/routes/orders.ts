@@ -12,15 +12,16 @@ import {
   OrderSlotUpdate,
   OrderSummary,
   paginated,
-  PersonOption,
   RenameOrderRequest,
   ReplaceSlotPersonRequest,
+  ShareCandidate,
   Slot,
   TaskActionRequest,
   WorkQuery,
   WorkResponse,
   stepOf,
   findTemplate,
+  viewableInline,
   type Team,
 } from '@docflow/shared';
 import { and, asc, count, desc, eq, gte, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
@@ -38,7 +39,7 @@ import {
   orderSlotPeople,
   tasks,
 } from '../db/schema.js';
-import { canSeeComponents } from '../engine/access.js';
+import { canSeeComponents, seesPrivatePhaseByRole } from '../engine/access.js';
 import { sinceClock } from '../engine/clock.js';
 import {
   addComponent,
@@ -93,6 +94,19 @@ function visibleTo(user: AuthUser): SQL | undefined {
 
 async function listOrders(db: Db, user: AuthUser, query: z.output<typeof OrderListQuery>) {
   const pattern = query.q ? containsPattern(query.q) : undefined;
+  // A phase hidden from Marketing alone (D29) stays hidden here too: no step titles from it,
+  // and no filtering by its steps, which would reveal how far it has got
+  const privateSteps = seesPrivatePhaseByRole(user, CURRENT_TEMPLATE)
+    ? undefined
+    : CURRENT_TEMPLATE.phasePrivacy;
+  const asMarketing = user.capabilities.includes('MARKETING')
+    ? sql<boolean>`true`
+    : sql<boolean>`exists (select 1 from ${orderSlotPeople} s where s.order_id = ${orders.id}
+        and s.slot = 'MARKETING' and s.employee_id = ${user.id})`;
+  const stepHidden =
+    query.stepKey &&
+    privateSteps &&
+    CURRENT_TEMPLATE.steps.find((s) => s.key === query.stepKey)?.phase === privateSteps.phase;
   const phaseOf = sql<number>`coalesce((select min(t.phase) from ${tasks} t where t.order_id = ${orders.id} and t.status = 'OPEN'),
                                       (select max(t.phase) from ${tasks} t where t.order_id = ${orders.id}), 1)`;
   const where = and(
@@ -103,6 +117,7 @@ async function listOrders(db: Db, user: AuthUser, query: z.output<typeof OrderLi
     query.stepKey
       ? sql`exists (select 1 from ${tasks} t where t.order_id = ${orders.id} and t.step_key = ${query.stepKey} and t.status = 'OPEN')`
       : undefined,
+    stepHidden ? sql`not ${asMarketing}` : undefined,
     query.createdFrom ? gte(orders.createdAt, new Date(query.createdFrom)) : undefined,
     query.createdTo ? lte(orders.createdAt, new Date(query.createdTo)) : undefined,
     pattern
@@ -135,6 +150,7 @@ async function listOrders(db: Db, user: AuthUser, query: z.output<typeof OrderLi
         closedAt: orders.closedAt,
         createdAt: orders.createdAt,
         updatedAt: orders.updatedAt,
+        asMarketing: privateSteps ? asMarketing : sql<boolean>`false`,
       })
       .from(orders)
       .innerJoin(buyers, eq(buyers.id, orders.buyerId))
@@ -165,9 +181,14 @@ async function listOrders(db: Db, user: AuthUser, query: z.output<typeof OrderLi
   return {
     items: rows.map((r) => {
       const template = findTemplate(r.templateKey, r.templateVersion);
+      const hidden = r.asMarketing ? template.phasePrivacy?.phase : undefined;
       const current = [
         ...new Set(
-          open.filter((t) => t.orderId === r.id).map((t) => stepOf(template, t.stepKey).title),
+          open
+            .filter((t) => t.orderId === r.id)
+            .map((t) => stepOf(template, t.stepKey))
+            .filter((s) => s.phase !== hidden)
+            .map((s) => s.title),
         ),
       ];
       return {
@@ -309,9 +330,7 @@ export const orderRoutes: FastifyPluginAsyncZod<RouteDeps & { storage: StorageSe
       const ctx = await visibleCtx(db, user, doc.orderId);
       // Kind, private audience and hidden phase, as everywhere else (D29)
       if (!(await privacyFor(db, user, ctx)).seesDoc(doc)) throw notFound('Document');
-      const inline =
-        request.query.mode === 'view' &&
-        (doc.fileMime === 'application/pdf' || doc.fileMime.startsWith('image/'));
+      const inline = request.query.mode === 'view' && viewableInline(doc.fileMime);
       const link = await storage.presignGet(doc.fileKey, {
         fileName: doc.fileName,
         expiresInSeconds: FILE_LINK_SECONDS,
@@ -431,14 +450,14 @@ export const orderRoutes: FastifyPluginAsyncZod<RouteDeps & { storage: StorageSe
       schema: {
         params: IdParam,
         querystring: z.object({ q: z.string().trim().max(100).default('') }),
-        response: { 200: PersonOption.array() },
+        response: { 200: ShareCandidate.array() },
       },
     },
     async (request) => {
       const ctx = await visibleCtx(db, currentUser(request), request.params.id);
       const q = request.query.q;
       return db
-        .select({ id: employees.id, name: employees.name, email: employees.email })
+        .select({ id: employees.id, name: employees.name })
         .from(employees)
         .where(
           and(

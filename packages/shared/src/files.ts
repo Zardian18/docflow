@@ -18,6 +18,10 @@ export const FILE_TYPES = {
   'image/png': { label: 'PNG', extension: '.png' },
 } as const;
 export type FileMime = keyof typeof FILE_TYPES;
+
+/** Files a browser can show itself (opened inline); everything else is only downloaded */
+export const viewableInline = (mime: string) =>
+  mime === 'application/pdf' || mime.startsWith('image/');
 export const FILE_MIMES = Object.keys(FILE_TYPES) as [FileMime, ...FileMime[]];
 export const FileMime = z.enum(FILE_MIMES);
 

@@ -1,9 +1,8 @@
 import { z } from 'zod';
 
-/** Response of GET /v1/ping — proves web, API, and database are wired together. */
+/** Response of GET /v1/ping — proves web, API, and database are wired together (no data). */
 export const PingResponse = z.object({
   message: z.literal('pong'),
   dbTime: z.iso.datetime({ offset: true }),
-  employeeCount: z.number().int().nonnegative(),
 });
 export type PingResponse = z.infer<typeof PingResponse>;

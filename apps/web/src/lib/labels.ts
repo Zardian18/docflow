@@ -1,12 +1,4 @@
-import {
-  ORDER_STATUS_LABEL,
-  SLOT_INFO,
-  TEAM_LABEL,
-  type Clock,
-  type OrderStatus,
-  type Slot,
-  type Team,
-} from '@docflow/shared';
+import { ORDER_STATUS_LABEL, type Clock, type OrderStatus } from '@docflow/shared';
 import { formatDistanceToNowStrict } from 'date-fns';
 import type { PillTone } from '@/components/StatusPill';
 import { formatDate } from './format';
@@ -26,9 +18,6 @@ export function clockText(clock: Clock, empty = 'Not started') {
   if (!clock) return empty;
   return `${days(clock.days)} · since ${formatDate(clock.since)}`;
 }
-
-export const holderText = (h: { team: Team | null; slot: Slot | null } | null) =>
-  h?.team ? TEAM_LABEL[h.team] : h?.slot ? SLOT_INFO[h.slot].label : '—';
 
 /** "3 days" or "5 hours", for how long something has waited */
 export const waitedFor = (iso: string) => formatDistanceToNowStrict(new Date(iso));

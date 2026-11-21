@@ -56,7 +56,7 @@ function RulesNote({ canEditChain }: { canEditChain: boolean }) {
           Empty roles can be filled later, or by Marketing on the order; an order can’t start until
           every role has someone.
         </li>
-        {!canEditChain && <li>Only Admin changes the default chain.</li>}
+        {!canEditChain && <li>Only Admin changes the default chain and deletes buyers.</li>}
       </ul>
     </aside>
   );
@@ -87,7 +87,8 @@ function ChainSummary({ slots }: { slots: SlotValue[] }) {
 function BuyerForm({ buyer }: { buyer: Buyer | null }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const canEditChain = useMe().data?.capabilities.includes('ADMIN') ?? false;
+  // Only Admin sets the default chain and deletes buyers (D27, D33)
+  const isAdmin = useMe().data?.capabilities.includes('ADMIN') ?? false;
   const [slots, setSlots] = useState<SlotValue[]>(() =>
     buyer
       ? buyer.slots.map((s) => ({ slot: s.slot, people: s.people, gate: s.gate }))
@@ -110,7 +111,7 @@ function BuyerForm({ buyer }: { buyer: Buyer | null }) {
       const body = {
         ...details,
         // Only Admin sends the chain; Marketing's saves leave it as it is (D27)
-        ...(canEditChain
+        ...(isAdmin
           ? {
               slots: slots.map((s) => ({
                 slot: s.slot,
@@ -137,7 +138,7 @@ function BuyerForm({ buyer }: { buyer: Buyer | null }) {
       : {};
   const problems = { ...slotValueProblems(slots, false), ...serverProblems };
   const onSubmit = form.handleSubmit((details) => {
-    if (canEditChain && Object.keys(slotValueProblems(slots, false)).length > 0) return;
+    if (isAdmin && Object.keys(slotValueProblems(slots, false)).length > 0) return;
     save.mutate(details);
   });
   const text = (
@@ -225,7 +226,7 @@ function BuyerForm({ buyer }: { buyer: Buyer | null }) {
               approve or any one is enough.
             </p>
           </div>
-          {canEditChain ? (
+          {isAdmin ? (
             <SlotEditor value={slots} onChange={setSlots} showGates problems={problems} />
           ) : (
             <ChainSummary slots={slots} />
@@ -233,7 +234,7 @@ function BuyerForm({ buyer }: { buyer: Buyer | null }) {
         </section>
 
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          {buyer && (
+          {buyer && isAdmin && (
             <DeleteButton
               name={buyer.name}
               what="buyer"
@@ -252,7 +253,7 @@ function BuyerForm({ buyer }: { buyer: Buyer | null }) {
           </Button>
         </div>
       </div>
-      <RulesNote canEditChain={canEditChain} />
+      <RulesNote canEditChain={isAdmin} />
     </form>
   );
 }

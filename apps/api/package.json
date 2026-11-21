@@ -30,11 +30,10 @@
     "@node-rs/argon2": "2.2.1",
     "close-with-grace": "2.5.0",
     "drizzle-orm": "0.45.3",
-    "fastify": "5.12.5",
+    "fastify": "5.12.8",
     "fastify-plugin": "6.0.0",
     "fastify-type-provider-zod": "7.0.0",
     "pg": "8.23.1",
-    "pino": "10.4.0",
     "zod": "4.6.7"
   },
   "devDependencies": {

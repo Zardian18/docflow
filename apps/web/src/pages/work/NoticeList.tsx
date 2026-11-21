@@ -1,4 +1,4 @@
-import type { Notice } from '@docflow/shared';
+import type { Notice, WorkResponse } from '@docflow/shared';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, Lock, Receipt } from 'lucide-react';
 import { Link } from 'react-router';
@@ -17,7 +17,11 @@ export function NoticeList({ notices }: { notices: Notice[] }) {
   const queryClient = useQueryClient();
   const read = useMutation({
     mutationFn: (id: string) => api.notices.read(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['work'] }),
+    // Drop the notice from every cached My Work view rather than refetching the whole page
+    onSuccess: (_data, id) =>
+      queryClient.setQueriesData<WorkResponse>({ queryKey: ['work'] }, (work) =>
+        work ? { ...work, notices: work.notices.filter((n) => n.id !== id) } : work,
+      ),
     onError: (err) => toast.error(errorMessage(err)),
   });
   if (notices.length === 0) {

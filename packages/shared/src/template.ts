@@ -612,8 +612,52 @@ export const EXPORT_ORDER_V3: Template = {
   ),
 };
 
-export const TEMPLATES: Template[] = [EXPORT_ORDER_V1, EXPORT_ORDER_V2, EXPORT_ORDER_V3];
-export const CURRENT_TEMPLATE = EXPORT_ORDER_V3;
+/**
+ * v4 (D32): the Creator uploads only the PI with rates, and the chain approves that. Once it
+ * is approved, the Creator is asked for the PI without rates, which goes on to "advance
+ * requested" with no approval of its own. Who opens which PI version doesn't change.
+ */
+export const EXPORT_ORDER_V4: Template = {
+  ...EXPORT_ORDER_V3,
+  version: 4,
+  steps: EXPORT_ORDER_V3.steps.flatMap((step): StepDef[] => {
+    if (step.kind === 'TASK' && step.key === 'pi') {
+      return [
+        {
+          ...step,
+          help: 'Upload the PI with rates and list the products. Marketing and the approvers review it.',
+          docs: [{ kind: 'PI_FULL', required: true }],
+        },
+      ];
+    }
+    if (step.kind === 'APPROVAL_CHAIN' && step.key === 'pi_approval') {
+      return [
+        { ...step, docToApprove: ['PI_FULL'] },
+        {
+          key: 'pi_no_rates',
+          kind: 'TASK',
+          phase: 1,
+          title: 'PI without rates',
+          help: 'The PI is approved. Upload the version without rates, buyer name or address, for the teams that may not see the full PI.',
+          after: ['pi_approval'],
+          actor: slot('CREATOR'),
+          actionLabel: 'Upload PI without rates',
+          docs: [{ kind: 'PI_NO_RATES', required: true }],
+        },
+      ];
+    }
+    if (step.key === 'advance_requested') return [{ ...step, after: ['pi_no_rates'] }];
+    return [step];
+  }),
+};
+
+export const TEMPLATES: Template[] = [
+  EXPORT_ORDER_V1,
+  EXPORT_ORDER_V2,
+  EXPORT_ORDER_V3,
+  EXPORT_ORDER_V4,
+];
+export const CURRENT_TEMPLATE = EXPORT_ORDER_V4;
 
 export function findTemplate(key: string, version: number): Template {
   const t = TEMPLATES.find((x) => x.key === key && x.version === version);

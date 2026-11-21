@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { buildApp } from './app.js';
+import { buildApp, safeError } from './app.js';
 import { createDb } from './db/client.js';
 import { TEST_TICK_SECRET, testEnv } from './test-helpers.js';
 
@@ -98,5 +98,25 @@ describe('error responses and request ids (Phase 7 findings 7 and 8)', () => {
       headers: { 'x-tick-secret': TEST_TICK_SECRET, origin: env.WEB_ORIGIN },
     });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe('safeError (F6)', () => {
+  it('logs a failed query without its SQL or values', () => {
+    const cause = Object.assign(new Error('duplicate key value'), {
+      code: '23505',
+      constraint: 'employees_email_unique',
+    });
+    const failed = Object.assign(
+      new Error('Failed query: insert into employees values ($1)\nparams: secret@x.co'),
+      { name: 'DrizzleQueryError', params: ['secret@x.co'], cause },
+    );
+    const logged = JSON.stringify(safeError(failed));
+    expect(logged).not.toContain('secret@x.co');
+    expect(logged).not.toContain('insert into');
+    expect(safeError(failed)).toMatchObject({
+      code: '23505',
+      constraint: 'employees_email_unique',
+    });
   });
 });

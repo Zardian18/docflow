@@ -12,6 +12,7 @@ import {
   paginated,
   PasswordLink,
   PersonOption,
+  ShareCandidate,
   PingResponse,
   PresignResponse,
   SlotAssignment,
@@ -118,6 +119,9 @@ function listParams(query: object) {
   return params.toString();
 }
 
+/** One path segment; ids come from the URL bar, so a crafted link can't reach another endpoint */
+const seg = encodeURIComponent;
+
 export const api = {
   ping: (signal?: AbortSignal) => get(PingResponse, '/v1/ping', signal),
 
@@ -140,11 +144,11 @@ export const api = {
       get(paginated(Employee), `/v1/employees?${listParams(query)}`, signal),
     create: (body: EmployeeCreate) =>
       request('/v1/employees', { method: 'POST', body }).then((d) => Employee.parse(d)),
-    remove: (id: string) => request(`/v1/employees/${id}`, { method: 'DELETE' }),
+    remove: (id: string) => request(`/v1/employees/${seg(id)}`, { method: 'DELETE' }),
     update: (id: string, body: EmployeeUpdate) =>
-      request(`/v1/employees/${id}`, { method: 'PUT', body }).then((d) => Employee.parse(d)),
+      request(`/v1/employees/${seg(id)}`, { method: 'PUT', body }).then((d) => Employee.parse(d)),
     passwordLink: (id: string) =>
-      request(`/v1/employees/${id}/password-link`, { method: 'POST', body: {} }).then((d) =>
+      request(`/v1/employees/${seg(id)}/password-link`, { method: 'POST', body: {} }).then((d) =>
         PasswordLink.parse(d),
       ),
   },
@@ -152,19 +156,19 @@ export const api = {
   buyers: {
     list: (query: Partial<ListQuery>, signal?: AbortSignal) =>
       get(paginated(Buyer), `/v1/buyers?${listParams(query)}`, signal),
-    get: (id: string, signal?: AbortSignal) => get(Buyer, `/v1/buyers/${id}`, signal),
+    get: (id: string, signal?: AbortSignal) => get(Buyer, `/v1/buyers/${seg(id)}`, signal),
     create: (body: BuyerUpsert) =>
       request('/v1/buyers', { method: 'POST', body }).then((d) => Buyer.parse(d)),
     update: (id: string, body: BuyerUpsert) =>
-      request(`/v1/buyers/${id}`, { method: 'PUT', body }).then((d) => Buyer.parse(d)),
-    remove: (id: string) => request(`/v1/buyers/${id}`, { method: 'DELETE' }),
+      request(`/v1/buyers/${seg(id)}`, { method: 'PUT', body }).then((d) => Buyer.parse(d)),
+    remove: (id: string) => request(`/v1/buyers/${seg(id)}`, { method: 'DELETE' }),
   },
 
   lookups: {
     people: (capability: Capability, q: string, signal?: AbortSignal) =>
       get(PersonOption.array(), `/v1/lookups/people?${listParams({ capability, q })}`, signal),
     buyerSlots: (id: string, signal?: AbortSignal) =>
-      get(SlotAssignment.array(), `/v1/lookups/buyers/${id}/slots`, signal),
+      get(SlotAssignment.array(), `/v1/lookups/buyers/${seg(id)}/slots`, signal),
     buyers: (q: string, signal?: AbortSignal) =>
       get(BuyerOption.array(), `/v1/lookups/buyers?${listParams({ q })}`, signal),
   },
@@ -176,51 +180,58 @@ export const api = {
       ),
     list: (query: OrderListQuery, signal?: AbortSignal) =>
       get(paginated(OrderSummary), `/v1/orders?${listParams(query)}`, signal),
-    get: (id: string, signal?: AbortSignal) => get(OrderDetail, `/v1/orders/${id}`, signal),
+    get: (id: string, signal?: AbortSignal) => get(OrderDetail, `/v1/orders/${seg(id)}`, signal),
     timeline: (id: string, signal?: AbortSignal) =>
-      get(OrderEvent.array(), `/v1/orders/${id}/timeline`, signal),
+      get(OrderEvent.array(), `/v1/orders/${seg(id)}/timeline`, signal),
     cancel: (id: string, reason: string) =>
-      request(`/v1/orders/${id}/cancel`, { method: 'POST', body: { reason } }),
+      request(`/v1/orders/${seg(id)}/cancel`, { method: 'POST', body: { reason } }),
     replacePerson: (
       id: string,
       body: { slot: Slot; fromEmployeeId: string; toEmployeeId: string; reason: string },
-    ) => request(`/v1/orders/${id}/replace-person`, { method: 'POST', body }),
+    ) => request(`/v1/orders/${seg(id)}/replace-person`, { method: 'POST', body }),
     /** Who a private message on this order can be shared with (D31) */
     shareCandidates: (id: string, q: string, signal?: AbortSignal) =>
-      get(PersonOption.array(), `/v1/orders/${id}/share-candidates?${listParams({ q })}`, signal),
+      get(
+        ShareCandidate.array(),
+        `/v1/orders/${seg(id)}/share-candidates?${listParams({ q })}`,
+        signal,
+      ),
     rename: (id: string, ref: string) =>
-      request(`/v1/orders/${id}/ref`, { method: 'PUT', body: { ref } }),
+      request(`/v1/orders/${seg(id)}/ref`, { method: 'PUT', body: { ref } }),
     updateSlot: (id: string, slot: Slot, body: OrderSlotUpdate) =>
-      request(`/v1/orders/${id}/slots/${slot}`, { method: 'PUT', body }),
+      request(`/v1/orders/${seg(id)}/slots/${seg(slot)}`, { method: 'PUT', body }),
     components: (id: string, signal?: AbortSignal) =>
-      get(ComponentTables, `/v1/orders/${id}/components`, signal),
+      get(ComponentTables, `/v1/orders/${seg(id)}/components`, signal),
   },
 
   tasks: {
     act: (taskId: string, body: TaskActionRequest) =>
-      request(`/v1/tasks/${taskId}/actions`, { method: 'POST', body }),
+      request(`/v1/tasks/${seg(taskId)}/actions`, { method: 'POST', body }),
   },
 
   components: {
     add: (orderId: string, productId: string, body: ComponentInput) =>
-      request(`/v1/orders/${orderId}/products/${productId}/components`, { method: 'POST', body }),
+      request(`/v1/orders/${seg(orderId)}/products/${seg(productId)}/components`, {
+        method: 'POST',
+        body,
+      }),
     update: (id: string, body: ComponentInput) =>
-      request(`/v1/components/${id}`, { method: 'PUT', body }),
+      request(`/v1/components/${seg(id)}`, { method: 'PUT', body }),
     remove: (id: string, comment?: string) =>
-      request(`/v1/components/${id}?${listParams({ comment })}`, { method: 'DELETE' }),
+      request(`/v1/components/${seg(id)}?${listParams({ comment })}`, { method: 'DELETE' }),
     history: (id: string, signal?: AbortSignal) =>
-      get(ComponentChange.array(), `/v1/components/${id}/history`, signal),
+      get(ComponentChange.array(), `/v1/components/${seg(id)}/history`, signal),
     /** Attach the component's purchase order (D29) */
     uploadPo: (id: string, uploadId: string) =>
-      request(`/v1/components/${id}/po`, { method: 'POST', body: { uploadId } }),
+      request(`/v1/components/${seg(id)}/po`, { method: 'POST', body: { uploadId } }),
   },
 
   documents: {
     /** view: open a PDF or image in the browser; download: save it. */
     fileLink: (id: string, mode: 'view' | 'download' = 'download') =>
       get(
-        z.object({ url: z.url(), expiresAt: z.string() }),
-        `/v1/documents/${id}/file?mode=${mode}`,
+        z.object({ url: z.httpUrl(), expiresAt: z.string() }),
+        `/v1/documents/${seg(id)}/file?mode=${mode}`,
       ),
   },
 
@@ -228,7 +239,7 @@ export const api = {
     get(WorkResponse, `/v1/work?${listParams(query)}`, signal),
 
   notices: {
-    read: (id: string) => request(`/v1/notices/${id}/read`, { method: 'POST' }),
+    read: (id: string) => request(`/v1/notices/${seg(id)}/read`, { method: 'POST' }),
   },
 
   uploads: {
