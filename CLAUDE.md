@@ -24,7 +24,7 @@ If `docs/decisions.md` says a decision is still `OPEN` and the task in front of 
 - When Figma has no design for a screen, reuse the existing tokens/components and tell the owner what you invented.
 
 ## Layout
-`apps/web` React SPA → **Cloudflare Pages** project `tridentlifeline` (`https://tridentlifeline.pages.dev`, D34; the old Worker `docflow` still serves the previous address) · `apps/api` Fastify API in Docker → **Render** free web service · `packages/shared` zod schemas and enums used by both · `infra/cron-worker` Cloudflare Worker `docflow-cron` calling `/internal/tick` on a cron trigger (retry safety net, not a keep-alive — see invariant 10) · `docs/`
+`apps/web` React SPA → **Cloudflare Pages** project `tridentlifeline` (`https://tridentlifeline.pages.dev`, D34) · `apps/api` Fastify API in Docker → **Render** free web service · `packages/shared` zod schemas and enums used by both · `infra/cron-worker` Cloudflare Worker `docflow-cron` calling `/internal/tick` on a cron trigger (retry safety net, not a keep-alive — see invariant 10) · `docs/`
 
 Deploys happen through each host's own git integration on push to `main` (Render; Cloudflare Pages for the web app; Workers Builds for `docflow-cron`). GitHub Actions only runs CI. Hosting details and dashboard settings: `docs/decisions.md` D15.
 

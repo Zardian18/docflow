@@ -57,8 +57,8 @@ Inputs: `URS.md` (converted from the client's URS.docx v1.0, 25 Aug 2026), the F
 ### 2.1 Overview
 
 ```
- Browser ──HTTPS──► Cloudflare Worker (static assets) ── React SPA ── app.<domain-once-bought>
-    │                                    (today: docflow.harddik2002.workers.dev)
+ Browser ──HTTPS──► Cloudflare Pages ── React SPA ── app.<domain-once-bought>
+    │                                    (today: tridentlifeline.pages.dev, D34)
     │ HTTPS + session cookie
     ▼
  API: Node + Fastify in a Docker container ── Render (free web service)
