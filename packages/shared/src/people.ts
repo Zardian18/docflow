@@ -81,9 +81,9 @@ export const SLOT_INFO: Record<
     multiple: true,
     hasGate: true,
   },
-  BOL_APPROVER: { label: 'BoL Approver', capability: 'APPROVER', multiple: true, hasGate: true },
+  BOL_APPROVER: { label: 'BL Approver', capability: 'APPROVER', multiple: true, hasGate: true },
   BOL_HEAD: {
-    label: 'BoL Head Approver',
+    label: 'BL Head Approver',
     capability: 'HEAD_APPROVER',
     multiple: true,
     hasGate: true,
