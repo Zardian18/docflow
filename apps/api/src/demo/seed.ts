@@ -780,7 +780,7 @@ async function runScenarios(
       await o.step(0.5, 'rohan', 'payment_check', { action: 'APPROVE' });
       made.push(o);
     }
-    // 8. Phase 3: at sea; the buyer asked for the BoL, now with the Head Approvers
+    // 8. Phase 3: at sea; the buyer asked for the BL, now with the Head Approvers
     {
       const o = await order('bol', 'gulf', 'ORS sachets', 60);
       await phase1(o, THC, ['ORS Sachets']);
@@ -810,7 +810,7 @@ async function runScenarios(
       });
       await o.step(2, 'imran', 'bol_requested', {
         action: 'LOG',
-        comment: 'Buyer emailed for the BoL',
+        comment: 'Buyer emailed for the BL',
       });
       await o.step(0.5, 'imran', 'bol', {
         action: 'COMPLETE',
@@ -821,7 +821,7 @@ async function runScenarios(
       await o.step(0.5, 'arjun', 'bol_approval', { action: 'APPROVE' });
       made.push(o);
     }
-    // 9. No Action Needed: BoL sent, still at sea
+    // 9. No Action Needed: BL sent, still at sea
     // 10. Done
     for (const [key, buyerKey, startDays, close] of [
       ['sent', 'kenya', 75, false],
@@ -855,7 +855,7 @@ async function runScenarios(
       });
       for (const who of ['pooja', 'rohan', 'priya', 'vikram', 'meera'])
         await o.step(0.5, who, 'bol_approval', { action: 'APPROVE' });
-      await o.step(0.5, 'imran', 'bol_sent', { action: 'LOG', comment: 'Couriered original BoL' });
+      await o.step(0.5, 'imran', 'bol_sent', { action: 'LOG', comment: 'Couriered original BL' });
       await o.step(3, 'imran', 'tracking', {
         action: 'CHECKPOINT',
         shipmentStatus: 'AT_PORT',

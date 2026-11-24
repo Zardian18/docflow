@@ -16,7 +16,7 @@ const GROUPS: Array<{ title: string; slots: Slot[] }> = [
   { title: 'Order', slots: ['MARKETING', 'CREATOR'] },
   { title: 'PI approval', slots: ['PI_APPROVER', 'PI_HEAD'] },
   { title: 'Payment check', slots: ['PAY_APPROVER', 'PAY_HEAD'] },
-  { title: 'BoL approval', slots: ['BOL_APPROVER', 'BOL_HEAD'] },
+  { title: 'BL approval', slots: ['BOL_APPROVER', 'BOL_HEAD'] },
 ];
 
 /**
